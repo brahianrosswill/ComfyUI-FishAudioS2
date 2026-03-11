@@ -178,7 +178,7 @@ Text-to-speech synthesis with inline emotion/prosody control.
 - `precision`: Model precision (`bfloat16`, `float16`, `float32`)
 - `attention`: Attention kernel (`auto`, `sdpa`, `sage_attention`, `flash_attention`)
 - `max_new_tokens`: Maximum acoustic tokens (0 = auto)
-- `chunk_length`: Chunk length for streaming (100-400)
+- `chunk_length`: Chunk length (100-400) [Will be removed in future update]
 - `temperature`: Sampling temperature (0.1-1.0)
 - `top_p`: Top-p nucleus sampling (0.1-1.0)
 - `repetition_penalty`: Repetition penalty (0.9-2.0)
