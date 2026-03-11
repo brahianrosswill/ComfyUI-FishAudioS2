@@ -54,7 +54,7 @@ This ComfyUI wrapper provides native node-based integration with:
 
 - **GPU:** NVIDIA GPU with **24GB+ VRAM** for full model (RTX 3090/4090, A5000, etc.)
   - **12GB+ VRAM** works with the **GPTQ W4A16 quantized model** (`s2-pro-w4a16`)
-- **CPU/MPS:** Supported but significantly slower
+- **CPU/MPS:** EXPERIMENTAL
 - **Python:** 3.10+
 - **CUDA:** 11.8+ (for GPU inference)
 
