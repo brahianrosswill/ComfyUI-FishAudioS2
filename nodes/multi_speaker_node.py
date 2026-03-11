@@ -284,18 +284,14 @@ if _V3:
             step = 0
 
             references = []
+            missing = []
             for i in range(1, n + 1):
                 speaker_audio = num_speakers.get(f"speaker_{i}_audio")
                 speaker_ref_text = num_speakers.get(f"speaker_{i}_ref_text") or ""
 
                 if speaker_audio is None:
-                    logger.warning(
-                        f"speaker_{i}_audio not connected — "
-                        f"[speaker_{i}] will use a random voice."
-                    )
-                    references.append(
-                        ServeReferenceAudio(audio=b"", text="")
-                    )
+                    missing.append(i)
+                    references.append(None)
                 else:
                     logger.info(f"Encoding reference audio for speaker {i}...")
                     ref_bytes = audio_bytes_from_comfy(speaker_audio)
@@ -310,6 +306,14 @@ if _V3:
                 step += 1
                 if pbar:
                     pbar.update_absolute(step, total_steps)
+
+            if missing:
+                missing_str = ", ".join(f"speaker_{i}_audio" for i in missing)
+                raise ValueError(
+                    f"Reference audio required for all speakers. "
+                    f"Missing: {missing_str}. "
+                    f"Please connect reference audio clips to each speaker input."
+                )
 
             _check_interrupt()
 
@@ -461,17 +465,13 @@ else:
             step = 0
 
             references = []
+            missing = []
             for i in range(1, num_speakers + 1):
                 speaker_audio = kwargs.get(f"speaker_{i}_audio")
                 speaker_ref_text = kwargs.get(f"speaker_{i}_ref_text") or ""
                 if speaker_audio is None:
-                    logger.warning(
-                        f"speaker_{i}_audio not connected — "
-                        f"[speaker_{i}] will use a random voice."
-                    )
-                    references.append(
-                        ServeReferenceAudio(audio=b"", text="")
-                    )
+                    missing.append(i)
+                    references.append(None)
                 else:
                     ref_bytes = audio_bytes_from_comfy(speaker_audio)
                     logger.debug(f"Speaker {i} audio bytes: {len(ref_bytes)}")
@@ -481,6 +481,14 @@ else:
                 step += 1
                 if pbar:
                     pbar.update_absolute(step, total_steps)
+
+            if missing:
+                missing_str = ", ".join(f"speaker_{i}_audio" for i in missing)
+                raise ValueError(
+                    f"Reference audio required for all speakers. "
+                    f"Missing: {missing_str}. "
+                    f"Please connect reference audio clips to each speaker input."
+                )
 
             _check_interrupt()
             prompt_text = _convert_speaker_tags(text)
