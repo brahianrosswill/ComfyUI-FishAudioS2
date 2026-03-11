@@ -39,22 +39,22 @@ This ComfyUI wrapper provides native node-based integration with:
 
 ## ✨ Features
 
-- **🎤 Zero-Shot Voice Cloning** – Clone any voice from 10-30 seconds of reference audio
-- **🎭 1500+ Emotive Tags** – Fine-grained control with `[laugh]`, `[whisper]`, `[excited]`, `[sad]`, etc.
-- **🌍 83 Languages** – Full multilingual support without phoneme preprocessing
-- **👥 Multi-Speaker TTS** – Generate conversations with multiple cloned voices in one pass
-- **🔗 Native ComfyUI Integration** – AUDIO noodle inputs, progress bars, interruption support
-- **⚡ Optimized Performance** – Support for bf16/fp16/fp32 dtypes, SDPA, FlashAttention, SageAttention
-- **📦 Smart Auto-Download** – Model weights auto-downloaded from HuggingFace on first use
-- **💾 Smart Caching** – Optional model caching with automatic unloading on config change
+- ** Zero-Shot Voice Cloning** – Clone any voice from 10-30 seconds of reference audio
+- ** 1500+ Emotive Tags** – Fine-grained control with `[laugh]`, `[whisper]`, `[excited]`, `[sad]`, etc.
+- ** 83 Languages** – Full multilingual support without phoneme preprocessing
+- ** Multi-Speaker TTS** – Generate conversations with multiple cloned voices in one pass
+- ** Native ComfyUI Integration** – AUDIO noodle inputs, progress bars, interruption support
+- ** Optimized Performance** – Support for bf16/fp16/fp32 dtypes, SDPA, FlashAttention, SageAttention
+- ** Smart Auto-Download** – Model weights auto-downloaded from HuggingFace on first use
+- ** Smart Caching** – Optional model caching with automatic unloading on config change
 
 ---
 
-## 💻 Requirements
+##  Requirements
 
 - **GPU:** NVIDIA GPU with **24GB+ VRAM** for full model (RTX 3090/4090, A5000, etc.)
   - **12GB+ VRAM** works with the **GPTQ W4A16 quantized model** (`s2-pro-w4a16`)
-- **CPU/MPS:** EXPERIMENTAL
+- **CPU/MPS:** ⚠️ EXPERIMENTAL
 - **Python:** 3.10+
 - **CUDA:** 11.8+ (for GPU inference)
 
@@ -82,7 +82,7 @@ This ComfyUI wrapper provides native node-based integration with:
 
 ---
 
-## 📦 Models
+## Models
 
 | Model | VRAM | Description |
 |-------|------|-------------|
@@ -97,10 +97,10 @@ Models are auto-downloaded from HuggingFace on first use:
 
 ---
 
-## 📦 Installation
+## Installation
 
 <details>
-<summary><b>📥 Click to expand installation methods</b></summary>
+<summary><b> Click to expand installation methods</b></summary>
 
 ### Method 1: ComfyUI Manager (Recommended)
 
@@ -122,7 +122,7 @@ pip install -r requirements.txt
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Node Overview
 
@@ -159,7 +159,7 @@ pip install -r requirements.txt
 
 ---
 
-## 🎛️ Node Reference
+## Node Reference
 
 ### Fish S2 TTS
 
@@ -221,7 +221,7 @@ Multi-speaker conversation synthesis.
 
 ---
 
-## 🎭 Emotive Tags
+## Emotive Tags
 
 S2 Pro supports **1500+ unique emotive tags** using `[tag]` syntax. These are free-form natural language descriptions, not predefined tags.
 
@@ -244,7 +244,7 @@ S2 Pro supports **1500+ unique emotive tags** using `[tag]` syntax. These are fr
 
 ---
 
-## 🌍 Supported Languages
+##  Supported Languages
 
 **83 languages** supported without phoneme preprocessing:
 
@@ -256,7 +256,7 @@ S2 Pro supports **1500+ unique emotive tags** using `[tag]` syntax. These are fr
 
 ---
 
-## 🗂️ File Structure
+## File Structure
 
 ```
 ComfyUI/
@@ -285,7 +285,7 @@ ComfyUI/
 
 ---
 
-## 📊 Parameters Explained
+## Parameters Explained
 
 | Parameter | Description | Recommended |
 |-----------|-------------|-------------|
@@ -300,7 +300,7 @@ ComfyUI/
 
 ---
 
-## 🔧 Troubleshooting
+## Troubleshooting
 
 <details>
 <summary><b>🛠️ Click to expand troubleshooting guide</b></summary>
