@@ -60,7 +60,7 @@ This ComfyUI wrapper provides native node-based integration with:
 
 - **GPU:** NVIDIA GPU with **24GB+ VRAM** for full model (RTX 3090/4090, A5000, etc.)
   - **12GB+ VRAM** works with the **GPTQ W4A16 quantized model** (`s2-pro-w4a16`)
-  - **12GB+ VRAM** works with the **FP8 quantized model** (`s2-pro-fp8`, requires RTX 4090/5090 or any Ada/Blackwell GPU with FP8 support)
+  - **16GB+ VRAM** works with the **FP8 quantized model** (`s2-pro-fp8`, requires RTX 4090/5090 or any Ada/Blackwell GPU with FP8 support)
 - **CPU/MPS:** ⚠️ EXPERIMENTAL
 - **Python:** 3.10+
 - **CUDA:** 11.8+ (for GPU inference)
@@ -95,7 +95,7 @@ This ComfyUI wrapper provides native node-based integration with:
 |-------|------|-------------|
 | **s2-pro** | ~24GB | Full precision (4B params) — best quality, works out of the box |
 | **s2-pro-w4a16** | ~8GB | GPTQ 4-bit mixed precision — **recommended for 12GB GPUs**, requires AutoGPTQ |
-| **s2-pro-fp8** | ~12GB | FP8 weight-only quantized — **recommended for Ada/Blackwell GPUs** (RTX 4090/5090), no extra dependencies |
+| **s2-pro-fp8** | ~16GB | FP8 weight-only quantized — **recommended for Ada/Blackwell GPUs** (RTX 4090/5090), no extra dependencies |
 
 Models are auto-downloaded from HuggingFace on first use:
 - [fishaudio/s2-pro](https://huggingface.co/fishaudio/s2-pro) — full model
