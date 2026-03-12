@@ -20,3 +20,4 @@ zstandard>=0.22.0
 resampy>=0.4.3
 protobuf>=4.21.0
 safetensors>=0.4.0
+pyrootutils>=1.0.4
