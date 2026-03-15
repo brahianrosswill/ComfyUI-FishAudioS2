@@ -84,6 +84,24 @@
 
 ---
 
+## 📊 测试配置
+
+| | 独立环境 | 共享 ComfyUI 环境 | FP8（RTX 4090/5090）|
+|---|---|---|---|
+| **Python** | 3.10 – 3.12 | 3.10 – 3.12 | 3.10 – 3.12 |
+| **PyTorch** | 2.x + CUDA 11.8+ | 由 ComfyUI 管理 | 2.x + CUDA 11.8+ |
+| **protobuf** | 任意（不会被修改） | 任意（不会被修改） | 任意（不会被修改） |
+| **descript-audio-codec** | 1.0.0（`--no-deps`） | 1.0.0（`--no-deps`） | 1.0.0（`--no-deps`） |
+| **descript-audiotools** | 0.7.2（`--no-deps`） | 0.7.2（`--no-deps`） | 0.7.2（`--no-deps`） |
+| **transformers** | ≥4.45.2 | ≥4.45.2 | ≥4.45.2 |
+| **bitsandbytes** | 可选（NF4/INT8） | 可选（NF4/INT8） | 不需要 |
+| **显存** | 24GB+（完整）/ 16GB+（BNB） | 24GB+（完整）/ 16GB+（BNB） | 20GB+（Ada/Blackwell） |
+| **GPU** | 任意 NVIDIA | 任意 NVIDIA | RTX 4090/5090 或 Ada/Blackwell |
+
+> 自 v0.3.0 起，`descript-audio-codec`、`descript-audiotools` 和 `protobuf` 不再通过 `pip install -r requirements.txt` 安装或修改。两个音频包会在首次启动时以 `--no-deps` 方式自动安装，不会影响环境中的 protobuf 版本。
+
+---
+
 ## 📦 安装
 
 <details>
@@ -104,6 +122,8 @@ git clone https://github.com/Saganaki22/ComfyUI-FishAudioS2.git
 cd ComfyUI-FishAudioS2
 pip install -r requirements.txt
 ```
+
+> **注意：** `descript-audio-codec` 和 `descript-audiotools` **不在** `requirements.txt` 中，这是有意为之 — 节点会在 ComfyUI 启动时以 `--no-deps` 方式自动安装它们，以避免其 `protobuf<5` 约束在共享环境中破坏其他节点。无需手动安装。
 
 </details>
 
@@ -304,6 +324,18 @@ huggingface-cli download fishaudio/s2-pro --local-dir ComfyUI/models/fishaudioS2
 FP8 量化模型从 [drbaph/s2-pro-fp8](https://huggingface.co/drbaph/s2-pro-fp8) 下载：
 ```bash
 huggingface-cli download drbaph/s2-pro-fp8 --local-dir ComfyUI/models/fishaudioS2/s2-pro-fp8
+```
+
+### 共享环境中出现 protobuf 冲突？
+
+如果遇到 `ImportError: cannot import name 'runtime_version' from 'google.protobuf'` 错误，或涉及 `descript-audiotools` / `descript-audio-codec` 与 `protobuf` 的依赖冲突，这是这些包的 `protobuf<5` 上限与需要 protobuf 5.x 的节点（tensorflow、mediapipe、florence2 等）之间的已知不兼容问题。
+
+自 v0.3.0 起已自动处理 — `descript-audio-codec` 和 `descript-audiotools` 在启动时以 `--no-deps` 方式安装，因此其 protobuf 约束不会被强制应用到环境中。请确保使用最新版本。
+
+如果在 v0.3.0 之前已手动安装，请重新安装：
+```bash
+pip install descript-audio-codec --no-deps
+pip install "descript-audiotools>=0.7.2" --no-deps
 ```
 
 ### 缺少依赖？

@@ -93,6 +93,24 @@ Models are auto-downloaded from HuggingFace on first use:
 
 ---
 
+## Tested Configurations
+
+| | Standalone env | Shared ComfyUI env | FP8 (RTX 4090/5090) |
+|---|---|---|---|
+| **Python** | 3.10 – 3.12 | 3.10 – 3.12 | 3.10 – 3.12 |
+| **PyTorch** | 2.x + CUDA 11.8+ | managed by ComfyUI | 2.x + CUDA 11.8+ |
+| **protobuf** | any (not touched) | any (not touched) | any (not touched) |
+| **descript-audio-codec** | 1.0.0 (`--no-deps`) | 1.0.0 (`--no-deps`) | 1.0.0 (`--no-deps`) |
+| **descript-audiotools** | 0.7.2 (`--no-deps`) | 0.7.2 (`--no-deps`) | 0.7.2 (`--no-deps`) |
+| **transformers** | ≥4.45.2 | ≥4.45.2 | ≥4.45.2 |
+| **bitsandbytes** | optional (NF4/INT8) | optional (NF4/INT8) | not needed |
+| **VRAM** | 24GB+ / 16GB+ (BNB) | 24GB+ / 16GB+ (BNB) | 20GB+ (Ada/Blackwell) |
+| **GPU** | any NVIDIA | any NVIDIA | RTX 4090/5090 or Ada/Blackwell |
+
+> As of v0.3.0, `descript-audio-codec`, `descript-audiotools`, and `protobuf` are never installed or modified by `pip install -r requirements.txt`. The two audio packages are auto-installed at first startup with `--no-deps`, leaving your environment's protobuf version untouched.
+
+---
+
 ## Installation
 
 <details>
@@ -113,6 +131,8 @@ git clone https://github.com/saganaki22/ComfyUI-FishAudioS2.git
 cd ComfyUI-FishAudioS2
 pip install -r requirements.txt
 ```
+
+> **Note:** `descript-audio-codec` and `descript-audiotools` are **not** in `requirements.txt` on purpose — they are auto-installed by the node at ComfyUI startup with `--no-deps` to avoid their `protobuf<5` constraint breaking other nodes in shared environments. You do not need to install them manually.
 
 </details>
 
@@ -308,6 +328,18 @@ huggingface-cli download fishaudio/s2-pro --local-dir ComfyUI/models/fishaudioS2
 For the FP8 quantized model, download from [drbaph/s2-pro-fp8](https://huggingface.co/drbaph/s2-pro-fp8):
 ```bash
 huggingface-cli download drbaph/s2-pro-fp8 --local-dir ComfyUI/models/fishaudioS2/s2-pro-fp8
+```
+
+### Protobuf Conflict in Shared Environments?
+
+If you see errors like `ImportError: cannot import name 'runtime_version' from 'google.protobuf'` or dependency conflicts involving `descript-audiotools` / `descript-audio-codec` and `protobuf`, this is a known incompatibility between those packages' `protobuf<5` upper-bound and nodes that need protobuf 5.x (tensorflow, mediapipe, florence2, etc.).
+
+As of v0.3.0 this is handled automatically — `descript-audio-codec` and `descript-audiotools` are installed at startup with `--no-deps` so their protobuf constraint is never enforced into the environment. Make sure you are on the latest version.
+
+If you installed them manually before v0.3.0, reinstall with:
+```bash
+pip install descript-audio-codec --no-deps
+pip install "descript-audiotools>=0.7.2" --no-deps
 ```
 
 ### Missing Dependencies?

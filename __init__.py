@@ -9,7 +9,7 @@ Required pip packages are auto-installed on startup.
 Model weights are auto-downloaded from HuggingFace on first inference.
 """
 
-__version__ = "0.2.9"
+__version__ = "0.3.0"
 
 import logging
 import subprocess
@@ -113,9 +113,13 @@ _REQUIRED = [
     ("loralib",         "loralib>=0.1.2"),
     ("hydra",           "hydra-core>=1.3.2"),
     ("einx",            "einx[torch]==0.2.2"),
-    ("dac",             "descript-audio-codec"),
+    # Install dac/audiotools with --no-deps to avoid their protobuf<5 upper-bound
+    # constraint being enforced into the environment. All of their runtime deps
+    # that matter for inference (numpy, torch, einops, etc.) are already covered
+    # by entries above. protobuf is NOT needed for TTS inference — it is only
+    # used by fish-speech's training dataset tooling which is never called here.
+    ("dac",             "descript-audio-codec --no-deps"),
     ("audiotools",      "descript-audiotools>=0.7.2 --no-deps"),
-    ("google.protobuf", "protobuf==5.29.5"),
     ("bitsandbytes",    "bitsandbytes"),
 ]
 

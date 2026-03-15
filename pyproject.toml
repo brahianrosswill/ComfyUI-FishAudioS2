@@ -1,7 +1,7 @@
 [project]
 name = "ComfyUI-fish-audio-s2"
 description = "ComfyUI custom nodes for Fish Audio S2-Pro TTS | voice clone, multi-speaker, and text-to-speech"
-version = "0.2.9"
+version = "0.3.0"
 license = {file = "LICENSE"}
 dependencies = [
     "numpy",
@@ -19,15 +19,17 @@ dependencies = [
     "cachetools",
     "zstandard",
     "resampy",
-    "protobuf",
     "safetensors",
     "pyrootutils",
     "natsort",
     "loralib",
     "hydra-core",
-    "descript-audio-codec",
-    "descript-audiotools",
     "bitsandbytes",
+    # descript-audio-codec and descript-audiotools are intentionally excluded.
+    # They are auto-installed at startup with --no-deps to avoid their
+    # protobuf<5 constraint conflicting with shared ComfyUI environments.
+    # protobuf is also excluded — it is only used by training tooling,
+    # not by TTS inference.
 ]
 
 [project.urls]
