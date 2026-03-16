@@ -314,7 +314,7 @@ ComfyUI/
 | **temperature** | Sampling randomness | `0.7` (balanced), lower = more deterministic |
 | **top_p** | Nucleus sampling | `0.7` (balanced) |
 | **repetition_penalty** | Reduce repetition | `1.2` (default) |
-| **compile_model** | torch.compile speedup | `True` (~10x after warmup) |
+| **compile_model** | torch.compile speedup | `True` (~10x after warmup, Linux only). Pin `max_new_tokens` to a fixed value when using compile — each new larger length triggers a recompile. |
 
 ---
 
@@ -369,7 +369,7 @@ Common missing packages:
 ### Slow Synthesis?
 
 - Install SageAttention: `pip install sageattention`, then select `sage_attention`
-- Enable `compile_model=True`
+- Enable `compile_model=True` (Linux only — pin `max_new_tokens` to avoid recompiles on varying lengths)
 - Use GPU with CUDA support
 - Enable `keep_model_loaded=True`
 

@@ -248,6 +248,13 @@ def resolve_device(device_choice: str) -> tuple[str, torch.dtype]:
             return "cuda", torch.bfloat16
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             return "mps", torch.float16
+        logger.warning(
+            "No CUDA or MPS GPU detected — falling back to CPU. "
+            "Inference will be very slow. If you have an NVIDIA GPU, your "
+            "PyTorch installation may be the CPU-only build. Restart ComfyUI; "
+            "if the problem persists reinstall PyTorch with the correct CUDA "
+            "index: https://pytorch.org/get-started/locally/"
+        )
         return "cpu", torch.float32
     if device_choice == "cuda":
         return "cuda", torch.bfloat16

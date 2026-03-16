@@ -295,22 +295,25 @@ def generate(
         model.parameters()
     ).dtype  # model weight dtype (bfloat16), NOT prompt dtype (int32)
 
-    # Critical fix: Only set up cache on first run or when necessary
-    if not hasattr(model, "_cache_setup_done") or not model._cache_setup_done:
-        with torch.device(device):
-            model.setup_caches(
-                max_batch_size=1,  # Fixed to 1, avoid dynamic changes
-                max_seq_len=model.config.max_seq_len,
-                dtype=next(model.parameters()).dtype,
-            )
-        model._cache_setup_done = True
+    # Allocate KV cache sized to this generation's actual needs.
+    # setup_caches() early-exits when the existing cache is already large enough,
+    # so this is free on repeated calls with the same or shorter T_new.
+    # When the user sets max_new_tokens the cache only grows as large as needed
+    # instead of always reserving the full model.config.max_seq_len (32 768 on
+    # s2-pro = ~4.5 GB of KV cache that would otherwise sit unused).
+    with torch.device(device):
+        model.setup_caches(
+            max_batch_size=1,
+            max_seq_len=T_new,
+            dtype=next(model.parameters()).dtype,
+        )
 
     codebook_dim = 1 + model.config.num_codebooks
 
-    # Create new tensor each time, but try to reuse memory
+    # Sequence buffer sized to T_new — exactly as large as needed.
     input_pos = torch.arange(0, T, device=device, dtype=torch.long)
     empty = torch.empty(
-        (codebook_dim, model.config.max_seq_len), dtype=prompt.dtype, device=device
+        (codebook_dim, T_new), dtype=prompt.dtype, device=device
     )
     empty[:, :T] = prompt
     seq = empty
@@ -400,9 +403,6 @@ def init_model(checkpoint_path, device, precision, compile=False, bnb_mode=None)
     model.fixed_temperature = torch.tensor(0.7, device=device, dtype=torch.float)
     model.fixed_top_p = torch.tensor(0.7, device=device, dtype=torch.float)
     model.fixed_repetition_penalty = torch.tensor(1.5, device=device, dtype=torch.float)
-
-    # Mark whether cache has been initialized
-    model._cache_setup_done = False
 
     if compile:
         logger.info("Compiling function...")
@@ -783,12 +783,10 @@ def launch_thread_safe_queue(
         model, decode_one_token = init_model(
             checkpoint_path, device, precision, compile=compile, bnb_mode=bnb_mode
         )
-        with torch.device(device):
-            model.setup_caches(
-                max_batch_size=1,
-                max_seq_len=model.config.max_seq_len,
-                dtype=next(model.parameters()).dtype,
-            )
+        # KV cache is NOT pre-allocated here.  It is allocated lazily in
+        # generate() sized to each request's actual T_new (prompt + max_new_tokens).
+        # This avoids reserving the full 32k * n_heads * head_dim * n_layers
+        # upfront — on s2-pro that alone is ~4.5 GB.
         init_event.set()
 
         while True:

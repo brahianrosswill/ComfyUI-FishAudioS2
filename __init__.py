@@ -9,8 +9,9 @@ Required pip packages are auto-installed on startup.
 Model weights are auto-downloaded from HuggingFace on first inference.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
+import importlib
 import logging
 import subprocess
 import sys
@@ -78,6 +79,9 @@ def _pip_install(spec: str) -> bool:
         )
         if result.returncode == 0:
             logger.info(f"Successfully installed: {spec}")
+            # Invalidate Python's import-system filesystem cache so the newly
+            # installed package is visible to __import__ without a restart.
+            importlib.invalidate_caches()
             return True
         logger.error(f"pip install failed for '{spec}':\n{result.stderr.strip()}")
         return False
@@ -112,7 +116,7 @@ _REQUIRED = [
     ("natsort",         "natsort>=8.4.0"),
     ("loralib",         "loralib>=0.1.2"),
     ("hydra",           "hydra-core>=1.3.2"),
-    ("einx",            "einx[torch]==0.2.2"),
+    ("einx",            "einx==0.2.2"),
     # Install dac/audiotools with --no-deps to avoid their protobuf<5 upper-bound
     # constraint being enforced into the environment. All of their runtime deps
     # that matter for inference (numpy, torch, einops, etc.) are already covered
@@ -186,7 +190,8 @@ def _restore_torch() -> None:
 def _ensure_dependencies() -> bool:
     """Auto-install any missing packages. Returns True when all are available."""
     all_ok = True
-    fish_speech_was_missing = False
+    any_installed = False
+    failed_specs: list[str] = []
 
     for import_name, pip_spec in _REQUIRED:
         try:
@@ -195,9 +200,8 @@ def _ensure_dependencies() -> bool:
             logger.warning(
                 f"'{import_name}' not found — auto-installing from: {pip_spec}"
             )
-            if import_name == "fish_speech":
-                fish_speech_was_missing = True
             if _pip_install(pip_spec):
+                any_installed = True
                 try:
                     __import__(import_name)
                 except ImportError:
@@ -205,21 +209,27 @@ def _ensure_dependencies() -> bool:
                         f"Installed '{pip_spec}' but '{import_name}' still "
                         "cannot be imported. Please restart ComfyUI."
                     )
+                    failed_specs.append(pip_spec)
                     all_ok = False
             else:
+                failed_specs.append(pip_spec)
                 all_ok = False
 
-    # If we just installed fish-speech, restore torch in case it was downgraded
-    if fish_speech_was_missing:
+    # If any package was auto-installed, ensure torch is still a CUDA build.
+    # pip may silently install a CPU torch as a transitive dependency of packages
+    # like transformers or bitsandbytes — especially in embedded Python where the
+    # CUDA torch was not installed via pip and has no pip metadata record.
+    if any_installed:
         _restore_torch()
 
     if not all_ok:
+        install_cmds = "\n".join(
+            f"  {sys.executable} -m pip install {s}" for s in failed_specs
+        )
         logger.error(
             "Auto-install failed for some packages. "
             "Install them manually then restart ComfyUI:\n"
-            f"  {sys.executable} -m pip install soundfile\n"
-            f"  {sys.executable} -m pip install "
-            "git+https://github.com/fishaudio/fish-speech"
+            + install_cmds
         )
     return all_ok
 

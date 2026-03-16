@@ -168,7 +168,9 @@ class FishS2TTS:
                     "tooltip": (
                         "Enable torch.compile (~10x speedup after warmup). "
                         "First run is slow while compiling. "
-                        "Not supported on Windows."
+                        "Not supported on Windows. "
+                        "For best results pin max_new_tokens to a fixed value — "
+                        "each new larger length triggers a recompile."
                     ),
                 }),
             },
