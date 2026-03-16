@@ -133,6 +133,10 @@ pip install -r requirements.txt
 
 </details>
 
+> [!CAUTION]
+> **永远不要运行 `pip install git+https://github.com/fishaudio/fish-speech`**
+> fish-speech 已内置于本节点中。运行该命令会降级 PyTorch 及其他核心包，可能导致整个 ComfyUI 环境损坏。如果启动时出现依赖报错，重启一次 ComfyUI 即可——节点会自动安装所需的一切。
+
 ---
 
 ## 🚀 快速开始
@@ -351,6 +355,10 @@ pip install -r requirements.txt
 
 常见缺少的包：
 - `sageattention` – 用于优化注意力（`pip install sageattention`）
+
+> [!CAUTION]
+> **永远不要运行 `pip install git+https://github.com/fishaudio/fish-speech`**
+> fish-speech 已内置于本节点中。运行该命令会降级 PyTorch 及其他包，导致 ComfyUI 环境损坏。启动时的依赖报错重启一次即可自动修复。
 
 ### 显存不足？
 

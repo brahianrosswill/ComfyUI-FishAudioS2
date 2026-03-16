@@ -142,6 +142,10 @@ pip install -r requirements.txt
 
 </details>
 
+> [!CAUTION]
+> **Never run `pip install git+https://github.com/fishaudio/fish-speech`**
+> fish-speech is already bundled inside this node. Running that command will downgrade PyTorch and other core packages, potentially breaking your entire ComfyUI environment. If you are seeing dependency errors at startup, restart ComfyUI once — the node auto-installs everything it needs.
+
 ---
 
 ## Quick Start
@@ -358,6 +362,10 @@ pip install -r requirements.txt
 
 Common missing packages:
 - `sageattention` – for optimized attention (`pip install sageattention`)
+
+> [!CAUTION]
+> **Never run `pip install git+https://github.com/fishaudio/fish-speech`**
+> fish-speech is bundled inside the node. Running that command will downgrade PyTorch and other packages, breaking your ComfyUI environment. Dependency errors on startup fix themselves after one restart.
 
 ### Out of Memory?
 
