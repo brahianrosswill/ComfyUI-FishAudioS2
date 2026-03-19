@@ -10,12 +10,6 @@ dependencies = [
     "loguru",
     "transformers",
     "einops",
-    "flatten-dict",
-    "importlib-resources",
-    "julius",
-    "randomname",
-    "ffmpy",
-    "argbind",
     "librosa",
     "rich",
     "ormsgpack",
@@ -30,11 +24,18 @@ dependencies = [
     "loralib",
     "hydra-core",
     "bitsandbytes",
+    "huggingface-hub",
+    # Transitive runtime deps of descript-audio-codec / descript-audiotools.
+    # Listed here for ComfyUI Manager awareness. Auto-installed by __init__.py.
+    "flatten-dict",
+    "importlib-resources",
+    "julius",
+    "randomname",
+    "ffmpy",
+    "argbind",
     # descript-audio-codec and descript-audiotools are intentionally excluded.
-    # They are auto-installed at startup with --no-deps to avoid their
-    # protobuf<5 constraint conflicting with shared ComfyUI environments.
-    # protobuf is also excluded — it is only used by training tooling,
-    # not by TTS inference.
+    # They MUST be installed with --no-deps to avoid their protobuf<5 constraint
+    # breaking shared ComfyUI environments. __init__.py handles this automatically.
 ]
 
 [project.urls]
