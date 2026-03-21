@@ -456,9 +456,8 @@ def init_model(checkpoint_path, device, precision, compile=False, bnb_mode=None)
         checkpoint_path, load_weights=True, bnb_mode=bnb_mode
     )
 
-    if bnb_mode is not None:
-        # BNB manages its own internal dtypes; only move to device, not dtype.
-        # Casting a BNB-quantized model with .to(dtype=...) corrupts the weights.
+    is_fp8 = "fp8" in str(checkpoint_path).lower()
+    if bnb_mode is not None or is_fp8:
         model = model.to(device=device)
     else:
         model = model.to(device=device, dtype=precision)
