@@ -1,3 +1,4 @@
+import gc
 import os
 import queue
 import re
@@ -634,10 +635,10 @@ def generate_long(
     repetition_penalty: float = 1.1,
     temperature: float = 1.0,
     compile: bool = False,
-    iterative_prompt: bool = True,
     chunk_length: int = 512,
     prompt_text: Optional[Union[str, list[str]]] = None,
     prompt_tokens: Optional[Union[torch.Tensor, list[torch.Tensor]]] = None,
+    max_context_batches: int = 0,
 ):
     assert 0 < top_p <= 1, "top_p must be in (0, 1]"
     assert 0 < temperature < 2, "temperature must be in (0, 2)"
@@ -716,6 +717,7 @@ def generate_long(
         conversation = _deepcopy_share_tensors(base_conversation)
 
         for batch_idx, batch_text in enumerate(batches):
+            t_batch = time.perf_counter()
             logger.info(
                 f"--- Sample {sample_idx}, Batch {batch_idx} "
                 f"({len(batch_text.encode('utf-8'))} bytes) ---"
@@ -732,6 +734,23 @@ def generate_long(
                     add_im_end=True,
                 )
             )
+
+            # Sliding window: trim BEFORE generation so this batch
+            # benefits from a smaller prompt (lower KV cache, faster attention).
+            # Keeps system + last max_context_batches (user, assistant) pairs
+            # + the current user message.
+            if max_context_batches > 0:
+                # Structure: [system, u0, a0, ..., u_{n-1}, a_{n-1}, user_n]
+                # Complete pairs = (len - 2) // 2  (excluding system + current user)
+                num_complete_pairs = (len(conversation.messages) - 2) // 2
+                while num_complete_pairs > max_context_batches:
+                    conversation.messages.pop(1)
+                    conversation.messages.pop(1)
+                    num_complete_pairs -= 1
+                    logger.info(
+                        f"Sliding window: trimmed to {num_complete_pairs} context batches "
+                        f"before batch {batch_idx} generation"
+                    )
 
             # Copy for generation; tensors shared to avoid redundant data copies.
             conversation_gen = _deepcopy_share_tensors(conversation)
@@ -773,10 +792,22 @@ def generate_long(
             encoded = encoded.to(device=device)
             prompt_length = encoded.size(1)
 
+            batch_max_tokens = max_new_tokens
+            if batch_max_tokens == 0:
+                cjk_chars = len(re.findall(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", batch_text))
+                western_words = len(re.sub(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af\s]+", " ", batch_text).split())
+                estimated = western_words * 10 + cjk_chars * 5 + 64
+                batch_max_tokens = max(64, min(estimated, max_length - prompt_length - 64))
+                logger.info(
+                    f"Auto max_new_tokens: {batch_max_tokens} "
+                    f"({western_words} words, {cjk_chars} CJK chars, "
+                    f"prompt {prompt_length}, headroom {max_length - prompt_length - batch_max_tokens})"
+                )
+
             y = generate(
                 model=model,
                 prompt=encoded,
-                max_new_tokens=max_new_tokens,
+                max_new_tokens=batch_max_tokens,
                 audio_masks=audio_masks,
                 audio_parts=audio_parts,
                 decode_one_token=decode_one_token,
@@ -817,8 +848,10 @@ def generate_long(
 
             yield GenerateResponse(action="sample", codes=codes, text=batch_text)
 
-            # Cleanup
             del y, encoded
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         if torch.cuda.is_available():
             logger.info(
@@ -953,7 +986,6 @@ def launch_thread_safe_queue(
 @click.option("--compile/--no-compile", default=False)
 @click.option("--seed", type=int, default=42)
 @click.option("--half/--no-half", default=False)
-@click.option("--iterative-prompt/--no-iterative-prompt", default=True)
 @click.option("--chunk-length", type=int, default=300)
 @click.option("--output-dir", type=Path, default="output")
 def main(
@@ -972,7 +1004,6 @@ def main(
     compile: bool,
     seed: int,
     half: bool,
-    iterative_prompt: bool,
     chunk_length: int,
     output_dir: Path,
 ) -> None:
@@ -1039,7 +1070,6 @@ def main(
         top_k=top_k,
         temperature=temperature,
         compile=compile,
-        iterative_prompt=iterative_prompt,
         chunk_length=chunk_length,
         prompt_text=list(prompt_text) if prompt_text else None,
         prompt_tokens=prompt_tokens_list,

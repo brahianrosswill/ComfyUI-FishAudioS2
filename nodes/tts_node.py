@@ -53,12 +53,12 @@ COMMON_GENERATION_INPUTS = {
     "chunk_length": ("INT", {
         "default": 200,
         "min": 100,
-        "max": 400,
+        "max": 800,
         "step": 10,
         "tooltip": (
-            "Chunk length for iterative synthesis (100-400). "
-            "Lower = faster first audio, slightly lower quality. "
-            "Higher = better prosody across long sentences."
+            "Chunk length in bytes for iterative synthesis (100-800). "
+            "Lower = more chunks, faster first audio, slightly lower quality. "
+            "Higher = fewer chunks, better prosody across long sentences."
         ),
     }),
     "temperature": ("FLOAT", {

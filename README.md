@@ -48,7 +48,9 @@ This ComfyUI wrapper provides native node-based integration with:
 - ** 1500+ Emotive Tags** – Fine-grained control with `[laugh]`, `[whisper]`, `[excited]`, `[sad]`, etc.
 - ** 83 Languages** – Full multilingual support without phoneme preprocessing
 - ** Multi-Speaker TTS** – Generate conversations with multiple cloned voices in one pass
-- ** Native ComfyUI Integration** – AUDIO noodle inputs, progress bars, interruption support
+- ** Long-Form TTS** – Synthesize 4+ minute texts with automatic chunking, sliding window context, deferred decoding, and per-batch auto token sizing for consistent voice and lower VRAM
+- ** VRAM Optimized** – DAC decoder offloading during generation, automatic GC cleanup between batches, sliding window before generation (not after) for smaller KV caches
+- ** Native ComfyUI Integration** – AUDIO noodle inputs, per-batch progress bars, interruption support
 - ** Optimized Performance** – Support for bf16/fp16/fp32 dtypes, SDPA, FlashAttention, SageAttention
 - ** Smart Auto-Download** – Model weights auto-downloaded from HuggingFace on first use
 - ** Smart Caching** – Optional model caching with automatic unloading on config change
@@ -163,6 +165,7 @@ pip install -r requirements.txt
 | **Fish S2 TTS** | Text-to-speech with inline emotion tags |
 | **Fish S2 Voice Clone TTS** | Voice cloning from reference audio + text |
 | **Fish S2 Multi-Speaker TTS** | Multi-speaker conversation synthesis |
+| **Fish S2 Long-Form TTS** | Long-form text (4+ minutes) with automatic chunking and voice consistency |
 
 ### Basic Workflow
 
@@ -189,6 +192,14 @@ pip install -r requirements.txt
    - Use `[speaker_1]:`, `[speaker_2]:` tokens in text
    - Run!
 
+5. **Long-Form TTS**
+   - Add `Fish S2 Long-Form TTS` node
+   - Paste long text (articles, stories, scripts)
+   - Optionally connect reference audio for voice cloning
+   - Adjust `max_context_batches` (0 = unlimited, 3 = recommended for 8-12GB VRAM)
+   - Adjust `max_words_per_chunk` to control text splitting granularity
+   - Run!
+
 ---
 
 ## Node Reference
@@ -205,7 +216,7 @@ Text-to-speech synthesis with inline emotion/prosody control.
 - `precision`: Model precision (`bfloat16`, `float16`, `float32`)
 - `attention`: Attention kernel (`auto`, `sdpa`, `sage_attention`, `flash_attention`)
 - `max_new_tokens`: Maximum acoustic tokens (0 = auto)
-- `chunk_length`: Chunk length (100-400) [Will be removed in future update]
+- `chunk_length`: Chunk length (100-800) [Will be removed in future update]
 - `temperature`: Sampling temperature (0.1-1.0)
 - `top_p`: Top-p nucleus sampling (0.1-1.0)
 - `repetition_penalty`: Repetition penalty (0.9-2.0)
@@ -252,6 +263,38 @@ Multi-speaker conversation synthesis.
 
 **Outputs:**
 - `audio`: Generated multi-speaker conversation (AUDIO)
+
+---
+
+### Fish S2 Long-Form TTS
+
+Long-form text-to-speech with automatic chunking and sliding window context for consistent voice across minutes of audio.
+
+Text is automatically split into chunks at sentence boundaries. Each chunk is processed with context from previous chunks (controlled by `max_context_batches`) to maintain consistent voice quality. Optionally clone a voice from reference audio.
+
+**VRAM Optimizations:**
+- Sliding window trims context **before** generation (not after), keeping prompts small and attention fast
+- DAC decoder is offloaded to CPU during LLaMA generation and only loaded back at the end to decode all segments at once
+- `gc.collect()` + `torch.cuda.empty_cache()` runs between every batch to reclaim freed tensors
+- `max_new_tokens=0` (auto) calculates per-batch token budgets from text length, avoiding oversized KV caches
+
+**Inputs:**
+- All standard inputs from Fish S2 TTS (model, text, language, device, precision, attention, generation params), plus:
+- `max_context_batches`: Number of previous batches to keep as context for voice consistency (0 = unlimited, 3 = recommended for 8-12GB VRAM, higher = better consistency but more VRAM)
+- `max_words_per_chunk`: Maximum words per chunk when splitting text (50-400, lower = more chunks with better granularity)
+- `enable_warmup`: Run a warmup inference before main TTS to avoid OOM on low-VRAM GPUs (recommended for BNB models on 8GB)
+- `offload_to_cpu`: Move model to CPU after generation to free VRAM while avoiding full reload penalty
+- `reference_audio` (optional): Reference audio to clone voice from (10-30 seconds)
+- `reference_text` (optional): Transcript of reference audio for improved cloning accuracy
+
+**Outputs:**
+- `audio`: Generated long-form speech (AUDIO)
+
+> **Tips:**
+> - For 4+ minute texts, increase `chunk_length` (400-800) to reduce the number of chunks and improve voice consistency
+> - Set `max_context_batches=0` only if you have ample VRAM — unlimited context can OOM on very long texts
+> - If audio quality degrades towards the end, increase `max_context_batches` or `chunk_length`
+> - Leave `max_new_tokens` at 0 (auto) — the per-batch estimation saves VRAM and works across all 83 languages
 
 ---
 
@@ -306,6 +349,8 @@ ComfyUI/
         │   ├── tts_node.py
         │   ├── voice_clone_node.py
         │   ├── multi_speaker_node.py
+        │   ├── longform_node.py
+        │   ├── utils.py
         │   ├── loader.py
         │   └── model_cache.py
         ├── fish_speech_src/           # Bundled fish-speech source
@@ -322,7 +367,7 @@ ComfyUI/
 | **precision** | Model precision | `bfloat16` (CUDA), `float32` (CPU/MPS) |
 | **attention** | Attention mechanism | `auto` (default), `sage_attention` (fastest, requires package) |
 | **keep_model_loaded** | Cache model | `True` for multiple runs |
-| **chunk_length**  | `200` (balanced), `100` (faster) |
+| **chunk_length**  | `200` (balanced), `100` (faster), `400-800` (long-form, fewer chunks) |
 | **temperature** | Sampling randomness | `0.7` (balanced), lower = more deterministic |
 | **top_p** | Nucleus sampling | `0.7` (balanced) |
 | **repetition_penalty** | Reduce repetition | `1.2` (default) |
@@ -392,6 +437,8 @@ If you see `ImportError: cannot import name 'AUDIO_EXTENSIONS' from 'fish_speech
 - Set `keep_model_loaded=False`
 - Reduce `chunk_length`
 - Close other applications
+- For long-form: lower `max_context_batches` to 2-3, or enable `offload_to_cpu`
+- For long-form: use FP8 or BNF NF4 quantized model to fit on 16-20GB GPUs
 
 ### Slow Synthesis?
 

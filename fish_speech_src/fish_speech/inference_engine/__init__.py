@@ -82,18 +82,23 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
             )
 
         segments = []
+        deferred_codes = []
+        decoder_device = self.decoder_model.device
+        is_longform = len(req.text) > 500 and not req.streaming
+
+        if is_longform and decoder_device.type == "cuda":
+            self.decoder_model.to("cpu")
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            logger.info("Long-form: decoder offloaded to CPU during LLaMA generation")
 
         while True:
-            # Get the response from the LLAMA model.
-            # Use a timeout so the main thread can periodically check for
-            # ComfyUI interrupts (cancel button) without blocking forever.
             wrapped_result = None
             while wrapped_result is None:
                 try:
                     wrapped_result = response_queue.get(timeout=0.1)
                 except Exception:
                     pass
-                # Check if ComfyUI has requested cancellation
                 try:
                     import comfy.model_management as _mm
                     _mm.throw_exception_if_processing_interrupted()
@@ -112,7 +117,6 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
                 )
                 break
 
-            # Check the response type
             if not isinstance(wrapped_result.response, GenerateResponse):
                 raise TypeError(
                     "Expected GenerateResponse, got {type(wrapped_result.response).__name__}"
@@ -120,17 +124,32 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
 
             result: GenerateResponse = wrapped_result.response
             if result.action != "next":
-                segment = self.get_audio_segment(result)
-
-                if req.streaming:  # Used only by the API server
+                if is_longform:
+                    deferred_codes.append(result.codes.cpu())
                     yield InferenceResult(
                         code="segment",
-                        audio=(sample_rate, segment),
+                        audio=None,
                         error=None,
                     )
-                segments.append(segment)
+                else:
+                    segment = self.get_audio_segment(result)
+                    if req.streaming:
+                        yield InferenceResult(
+                            code="segment",
+                            audio=(sample_rate, segment),
+                            error=None,
+                        )
+                    segments.append(segment)
             else:
                 break
+
+        if deferred_codes:
+            self.decoder_model.to(decoder_device)
+            logger.info(f"Long-form: decoding {len(deferred_codes)} segments")
+            for codes in deferred_codes:
+                segment = self._decode_codes(codes)
+                segments.append(segment)
+            logger.info("Long-form: all segments decoded")
 
         # Release CUDA cached blocks so other ComfyUI nodes can use the VRAM.
         if torch.cuda.is_available():
@@ -170,10 +189,10 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
             repetition_penalty=req.repetition_penalty,
             temperature=req.temperature,
             compile=self.compile,
-            iterative_prompt=req.chunk_length > 0,
             chunk_length=req.chunk_length,
             prompt_tokens=prompt_tokens,
             prompt_text=prompt_texts,
+            max_context_batches=req.max_context_batches,
         )
 
         # Create a queue to get the response
@@ -190,16 +209,18 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
         return response_queue
 
     def get_audio_segment(self, result: GenerateResponse) -> np.ndarray:
-        """
-        Decode the VQ tokens to audio.
-        """
-
-        # Don't use autocast on MPS devices
         with autocast_exclude_mps(
             device_type=self.decoder_model.device.type, dtype=self.precision
         ):
-            # Decode the symbolic tokens to audio
             segment = self.decode_vq_tokens(codes=result.codes)
 
-        # Convert the audio to numpy
+        return segment.float().cpu().numpy()
+
+    def _decode_codes(self, codes: torch.Tensor) -> np.ndarray:
+        codes = codes.to(self.decoder_model.device)
+        with autocast_exclude_mps(
+            device_type=self.decoder_model.device.type, dtype=self.precision
+        ):
+            segment = self.decode_vq_tokens(codes=codes)
+
         return segment.float().cpu().numpy()

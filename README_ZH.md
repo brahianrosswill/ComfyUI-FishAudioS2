@@ -39,7 +39,9 @@
 - **🎭 1500+ 情感标签** – 细粒度控制：`[laugh]`、`[whisper]`、`[excited]`、`[sad]` 等
 - **🌍 83 种语言** – 无需音素预处理的全多语言支持
 - **👥 多说话人 TTS** – 一次生成多个克隆声音的对话
-- **🔗 原生 ComfyUI 集成** – AUDIO 连接输入、进度条、中断支持
+- **📖 长文本 TTS** – 合成 4 分钟以上的长文本，自动分块 + 滑动窗口上下文 + 延迟解码 + 按批次自动计算 token 预算，保持声音一致性并降低显存
+- **⚡ 显存优化** – 生成期间 DAC 解码器自动卸载到 CPU、每批次间自动垃圾回收、生成前滑动窗口裁剪上下文以缩小 KV 缓存
+- **🔗 原生 ComfyUI 集成** – AUDIO 连接输入、按批次更新进度条、中断支持
 - **⚡ 性能优化** – 支持 bf16/fp16/fp32、SDPA、FlashAttention、SageAttention
 - **📦 智能自动下载** – 首次使用时自动从 HuggingFace 下载模型权重
 - **💾 智能缓存** – 可选模型缓存，配置变更时自动卸载
@@ -154,6 +156,7 @@ pip install -r requirements.txt
 | **Fish S2 TTS** | 带内联情感标签的文本转语音 |
 | **Fish S2 Voice Clone TTS** | 从参考音频克隆声音 |
 | **Fish S2 Multi-Speaker TTS** | 多说话人对话合成 |
+| **Fish S2 Long-Form TTS** | 长文本（4 分钟以上）自动分块，保持声音一致性 |
 
 ### 基础工作流
 
@@ -180,6 +183,14 @@ pip install -r requirements.txt
    - 在文本中使用 `[speaker_1]:`、`[speaker_2]:` 标签
    - 运行！
 
+5. **长文本合成**
+   - 添加 `Fish S2 Long-Form TTS` 节点
+   - 粘贴长文本（文章、故事、脚本）
+   - 可选连接参考音频进行声音克隆
+   - 调整 `max_context_batches`（0 = 无限制，3 = 推荐，适合 8-12GB 显存）
+   - 调整 `max_words_per_chunk` 控制文本分割粒度
+   - 运行！
+
 ---
 
 ## 🎛️ 节点参考
@@ -196,7 +207,7 @@ pip install -r requirements.txt
 - `precision`：模型精度（`auto`、`bfloat16`、`float16`、`float32`）
 - `attention`：注意力内核（`auto`、`sdpa`、`sage_attention`、`flash_attention`）
 - `max_new_tokens`：最大声学 token 数（0 = 自动）
-- `chunk_length`：流式分块长度（100-400）
+- `chunk_length`：流式分块长度（100-800）
 - `temperature`：采样温度（0.1-1.0）
 - `top_p`：Top-p 核采样（0.1-1.0）
 - `repetition_penalty`：重复惩罚（0.9-2.0）
@@ -245,6 +256,38 @@ pip install -r requirements.txt
 
 **输出：**
 - `audio`：生成的多说话人对话（AUDIO）
+
+---
+
+### Fish S2 Long-Form TTS
+
+长文本语音合成，支持自动分块和滑动窗口上下文，在数分钟的音频中保持声音一致性。
+
+文本自动按句子边界分割为多个块。每个块处理时会参考前面块的内容（由 `max_context_batches` 控制），以保持声音质量的一致性。可选从参考音频克隆声音。
+
+**显存优化：**
+- 滑动窗口在生成**之前**（而非之后）裁剪上下文，保持提示词简短，注意力计算更快
+- DAC 解码器在 LLaMA 生成期间卸载到 CPU，仅在最后一次性解码所有音频段
+- 每个批次之间运行 `gc.collect()` + `torch.cuda.empty_cache()` 回收已释放的显存
+- `max_new_tokens=0`（自动）根据文本长度按批次计算 token 预算，避免 KV 缓存过大
+
+**输入：**
+- Fish S2 TTS 的所有标准输入（模型、文本、语言、设备、精度、注意力、生成参数），加上：
+- `max_context_batches`：保留的上下文批次数量，用于保持声音一致性（0 = 无限制，3 = 推荐，适合 8-12GB 显存，越高一致性越好但占用更多显存）
+- `max_words_per_chunk`：分块最大词数（50-400，越低 = 更多分块，粒度更细）
+- `enable_warmup`：在主合成前运行预热推理，避免低显存 GPU 出现 OOM（推荐 BNB 模型在 8GB 显卡上开启）
+- `offload_to_cpu`：生成后将模型移至 CPU 以释放显存，同时避免完全重新加载的开销
+- `reference_audio`（可选）：要克隆的参考音频（10-30 秒）
+- `reference_text`（可选）：参考音频的文字稿，提高克隆准确性
+
+**输出：**
+- `audio`：生成的长文本语音（AUDIO）
+
+> **提示：**
+> - 对于 4 分钟以上的文本，增大 `chunk_length`（400-800）以减少分块数量，提高声音一致性
+> - 仅在显存充裕时设置 `max_context_batches=0`——无限制上下文在超长文本上可能导致 OOM
+> - 如果音频质量在末尾明显下降，增大 `max_context_batches` 或 `chunk_length`
+> - 将 `max_new_tokens` 保持为 0（自动）——按批次估算可节省显存，且兼容所有 83 种语言
 
 ---
 
@@ -299,6 +342,8 @@ ComfyUI/
         │   ├── tts_node.py
         │   ├── voice_clone_node.py
         │   ├── multi_speaker_node.py
+        │   ├── longform_node.py
+        │   ├── utils.py
         │   ├── loader.py
         │   └── model_cache.py
         ├── fish_speech_src/           # 捆绑的 fish-speech 源码
@@ -315,7 +360,7 @@ ComfyUI/
 | **precision** | 模型精度 | `auto`（自动），`bfloat16`（CUDA），`float32`（CPU/MPS） |
 | **attention** | 注意力机制 | `auto`（默认），`sage_attention`（最快，需安装） |
 | **keep_model_loaded** | 缓存模型 | 多次运行时设为 `True` |
-| **chunk_length** | 分块长度 | `200`（平衡），`100`（更快） |
+| **chunk_length** | 分块长度 | `200`（平衡），`100`（更快），`400-800`（长文本，更少分块） |
 | **temperature** | 采样随机性 | `0.7`（平衡），越低越确定 |
 | **top_p** | 核采样 | `0.7`（平衡） |
 | **repetition_penalty** | 减少重复 | `1.2`（默认） |
@@ -385,6 +430,8 @@ pip install "descript-audiotools>=0.7.2" --no-deps
 - 设置 `keep_model_loaded=False`
 - 减少 `chunk_length`
 - 关闭其他应用程序
+- 长文本：降低 `max_context_batches` 至 2-3，或开启 `offload_to_cpu`
+- 长文本：使用 FP8 或 BNB NF4 量化模型以适配 16-20GB 显存
 
 ### 合成速度慢？
 

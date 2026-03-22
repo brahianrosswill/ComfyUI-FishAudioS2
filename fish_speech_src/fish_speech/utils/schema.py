@@ -99,6 +99,8 @@ class ServeTTSRequest(BaseModel):
     top_p: Annotated[float, Field(ge=0.1, le=1.0, strict=True)] = 0.8
     repetition_penalty: Annotated[float, Field(ge=0.9, le=2.0, strict=True)] = 1.1
     temperature: Annotated[float, Field(ge=0.1, le=1.0, strict=True)] = 0.8
+    # Sliding window context limit for long-form TTS (0 = unlimited)
+    max_context_batches: int = 0
 
     class Config:
         # Allow arbitrary types for pytorch related types

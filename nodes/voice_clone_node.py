@@ -177,13 +177,10 @@ class FishS2VoiceCloneTTS:
 
         from fish_speech.utils.schema import ServeReferenceAudio, ServeTTSRequest
 
-        pbar = ProgressBar(4) if _PBAR else None
+        pbar = ProgressBar(0) if _PBAR else None
 
         logger.info("Encoding reference audio...")
         ref_bytes = audio_bytes_from_comfy(reference_audio)
-
-        if pbar:
-            pbar.update_absolute(1, 4)
 
         prompt_text = f"[{language}] {text}" if language != "auto" else text
         actual_seed = seed
@@ -208,9 +205,6 @@ class FishS2VoiceCloneTTS:
             format="wav",
         )
 
-        if pbar:
-            pbar.update_absolute(2, 4)
-
         self._check_interrupt()
 
         logger.info(f"Voice-clone TTS: {text[:80]}{'...' if len(text) > 80 else ''}")
@@ -225,16 +219,10 @@ class FishS2VoiceCloneTTS:
                 if result.code == "final":
                     sample_rate, audio_out = result.audio
 
-            if pbar:
-                pbar.update_absolute(3, 4)
-
             if audio_out is None:
                 raise RuntimeError("No audio produced.")
 
             output = numpy_audio_to_comfy(audio_out, sample_rate)
-
-            if pbar:
-                pbar.update_absolute(4, 4)
 
         finally:
             # Always run on completion, cancellation, or error.

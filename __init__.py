@@ -1,9 +1,10 @@
 """ComfyUI custom nodes for Fish Audio S2-Pro TTS.
 
-Provides three nodes:
+Provides four nodes:
   - FishS2TTS             — text → speech, 80+ languages, inline emotion tags
   - FishS2VoiceCloneTTS   — reference audio + text → cloned-voice speech
   - FishS2MultiSpeakerTTS — multi-speaker conversation synthesis in one pass
+  - FishS2LongFormTTS     — long-form text with native chunking and sliding window context
 
 Required pip packages are auto-installed on startup.
 Model weights are auto-downloaded from HuggingFace on first inference.
@@ -276,17 +277,20 @@ if _ensure_fish_source() and _ensure_dependencies():
         from .nodes.tts_node import FishS2TTS
         from .nodes.voice_clone_node import FishS2VoiceCloneTTS
         from .nodes.multi_speaker_node import FishS2MultiSpeakerTTS
+        from .nodes.longform_node import FishS2LongFormTTS
 
         NODE_CLASS_MAPPINGS = {
             "FishS2TTS": FishS2TTS,
             "FishS2VoiceCloneTTS": FishS2VoiceCloneTTS,
             "FishS2MultiSpeakerTTS": FishS2MultiSpeakerTTS,
+            "FishS2LongFormTTS": FishS2LongFormTTS,
         }
 
         NODE_DISPLAY_NAME_MAPPINGS = {
             "FishS2TTS": "Fish S2 TTS",
             "FishS2VoiceCloneTTS": "Fish S2 Voice Clone TTS",
             "FishS2MultiSpeakerTTS": "Fish S2 Multi-Speaker TTS",
+            "FishS2LongFormTTS": "Fish S2 Long-Form TTS",
         }
 
         logger.info(
