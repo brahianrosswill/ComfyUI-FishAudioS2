@@ -457,7 +457,39 @@ def init_model(checkpoint_path, device, precision, compile=False, bnb_mode=None)
     )
 
     is_fp8 = "fp8" in str(checkpoint_path).lower()
+
+    if device.type == "cuda":
+        torch.cuda.empty_cache()
+
+    model_bytes = sum(p.numel() * p.element_size() for p in model.parameters())
+    model_bytes += sum(b.numel() * b.element_size() for b in model.buffers())
+
+    if device.type == "cuda":
+        free_mem = torch.cuda.mem_get_info()[0]
+        logger.info(
+            f"Model memory estimate: {model_bytes / 1e9:.2f} GB, "
+            f"Free VRAM: {free_mem / 1e9:.2f} GB"
+        )
+        if model_bytes > free_mem * 0.85:
+            raise RuntimeError(
+                f"Insufficient VRAM: model needs ~{model_bytes / 1e9:.1f} GB "
+                f"but only {free_mem / 1e9:.1f} GB is free. "
+                f"Unload other models, close other apps, or try CPU offload."
+            )
+
     if bnb_mode is not None or is_fp8:
+        if is_fp8 and device.type == "cuda":
+            _test_fp8 = torch.zeros(1, dtype=torch.float8_e4m3fn, device="cpu").to(device)
+            if _test_fp8.dtype != torch.float8_e4m3fn:
+                del _test_fp8
+                raise RuntimeError(
+                    "float8_e4m3fn is not supported on this CUDA device / PyTorch version. "
+                    "The FP8 model weights would be upcast to float16 or float32, "
+                    "doubling/quadrupling VRAM usage. Use s2-pro-bnb-nf4 (~4-5 GB) or "
+                    "s2-pro-bnb-int8 (~8-9 GB) instead."
+                )
+            del _test_fp8
+            torch.cuda.empty_cache()
         model = model.to(device=device)
     else:
         model = model.to(device=device, dtype=precision)
