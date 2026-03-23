@@ -457,14 +457,15 @@ def init_model(checkpoint_path, device, precision, compile=False, bnb_mode=None)
     )
 
     is_fp8 = "fp8" in str(checkpoint_path).lower()
+    is_cuda = str(device) == "cuda"
 
-    if device.type == "cuda":
+    if is_cuda:
         torch.cuda.empty_cache()
 
     model_bytes = sum(p.numel() * p.element_size() for p in model.parameters())
     model_bytes += sum(b.numel() * b.element_size() for b in model.buffers())
 
-    if device.type == "cuda":
+    if is_cuda:
         free_mem = torch.cuda.mem_get_info()[0]
         logger.info(
             f"Model memory estimate: {model_bytes / 1e9:.2f} GB, "
@@ -478,7 +479,7 @@ def init_model(checkpoint_path, device, precision, compile=False, bnb_mode=None)
             )
 
     if bnb_mode is not None or is_fp8:
-        if is_fp8 and device.type == "cuda":
+        if is_fp8 and is_cuda:
             _test_fp8 = torch.zeros(1, dtype=torch.float8_e4m3fn, device="cpu").to(device)
             if _test_fp8.dtype != torch.float8_e4m3fn:
                 del _test_fp8
