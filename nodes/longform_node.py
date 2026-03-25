@@ -117,6 +117,15 @@ class FishS2LongFormTTS:
                     "Recommended for BNB models on 8GB GPUs."
                 ),
             }),
+            "low_vram_mode": ("BOOLEAN", {
+                "default": False,
+                "tooltip": (
+                    "Enable aggressive memory optimization for low-VRAM GPUs (8GB). "
+                    "Offloads decoder to CPU during LLaMA generation, then offloads "
+                    "LLaMA before decoding. Slower but prevents OOM. "
+                    "Automatically enabled for texts > 500 chars."
+                ),
+            }),
             "keep_model_loaded": ("BOOLEAN", {
                 "default": True,
                 "tooltip": (
@@ -185,6 +194,7 @@ class FishS2LongFormTTS:
         max_context_batches: int,
         max_words_per_chunk: int,
         enable_warmup: bool,
+        low_vram_mode: bool,
         keep_model_loaded: bool,
         offload_to_cpu: bool,
         compile_model: bool,
@@ -260,6 +270,7 @@ class FishS2LongFormTTS:
             streaming=False,
             format="wav",
             max_context_batches=max_context_batches,
+            low_vram_mode=low_vram_mode,
         )
 
         self._check_interrupt()

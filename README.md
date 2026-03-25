@@ -57,14 +57,15 @@ This ComfyUI wrapper provides native node-based integration with:
 
 ---
 
-##  Requirements
+## Requirements
 
 - **GPU:** NVIDIA GPU with **24GB+ VRAM** for full model (RTX 3090/4090, A5000, etc.)
+  - **8GB VRAM** works with **BNB NF4** + **low_vram_mode** (slower due to CPU offloading)
   - **16GB+ VRAM** works with **BNB NF4 4-bit on-the-fly quantization** (~10-11 it/s)
-  - **CPU/MPS:** ~1.5-2 seconds per token (experimental)
   - **18GB+ VRAM** works with **BNB INT8 on-the-fly quantization** (~10-11 it/s)
   - **20GB+ VRAM** works with the **FP8 quantized model** (`s2-pro-fp8`, ~15 it/s, requires RTX 4090/5090 or Ada/Blackwell GPU)
-- **CPU/MPS:** ⚠️ EXPERIMENTAL
+- **RTX 20 / GTX 16 series (Turing):** Auto-detects and falls back to `float16` — use `precision=auto`
+- **CPU/MPS:** ~1.5-2 seconds per token (experimental)
 - **Python:** 3.10+
 - **CUDA:** 11.8+ (for GPU inference)
 
@@ -89,6 +90,7 @@ This ComfyUI wrapper provides native node-based integration with:
 | **s2-pro-fp8** | ~20GB | ~15 it/s | FP8 weight-only quantized — **recommended for 20GB+ Ada/Blackwell GPUs** (RTX 4090/5090), no extra dependencies |
 | **BNB INT8** | ~18GB | ~10-11 it/s | On-the-fly INT8 quantization via bitsandbytes — uses s2-pro model, requires bitsandbytes |
 | **BNB NF4** | ~16GB | ~10-11 it/s | On-the-fly 4-bit NF4 quantization via bitsandbytes — uses s2-pro model, requires bitsandbytes |
+| **BNB NF4 + low_vram_mode** | ~8GB | slower | **For 8GB GPUs (RTX 2070/3070, etc.)** — enables aggressive CPU offloading to prevent OOM |
 
 Models are auto-downloaded from HuggingFace on first use:
 - [fishaudio/s2-pro](https://huggingface.co/fishaudio/s2-pro) — full model
@@ -213,7 +215,7 @@ Text-to-speech synthesis with inline emotion/prosody control.
 - `text`: Text to synthesize with optional `[tag]` emotion markers
 - `language`: Language hint (`auto`, `en`, `zh`, `ja`, `ko`, etc.)
 - `device`: Compute device (`auto`, `cuda`, `cpu`, `mps`)
-- `precision`: Model precision (`bfloat16`, `float16`, `float32`)
+- `precision`: Model precision (`auto` detects GPU capability — bfloat16 for RTX 30+, float16 for RTX 20/GTX 16, or explicitly set `bfloat16`, `float16`, `float32`)
 - `attention`: Attention kernel (`auto`, `sdpa`, `sage_attention`, `flash_attention`)
 - `max_new_tokens`: Maximum acoustic tokens (0 = auto)
 - `chunk_length`: Chunk length (100-800) [Will be removed in future update]
@@ -273,8 +275,10 @@ Long-form text-to-speech with automatic chunking and sliding window context for 
 Text is automatically split into chunks at sentence boundaries. Each chunk is processed with context from previous chunks (controlled by `max_context_batches`) to maintain consistent voice quality. Optionally clone a voice from reference audio.
 
 **VRAM Optimizations:**
-- Sliding window trims context **before** generation (not after), keeping prompts small and attention fast
-- DAC decoder is offloaded to CPU during LLaMA generation and only loaded back at the end to decode all segments at once
+- **Automatic precision detection:** RTX 20/GTX 16 series (Turing) auto-fallback to `float16` — prevents OOM on 8GB cards
+- **Sliding window** trims context **before** generation (not after), keeping prompts small and attention fast
+- **DAC decoder offloading** to CPU during LLaMA generation — only loaded back at decode phase
+- **LLaMA offloading** to CPU before decoder reload — prevents OOM when both models need VRAM simultaneously
 - `gc.collect()` + `torch.cuda.empty_cache()` runs between every batch to reclaim freed tensors
 - `max_new_tokens=0` (auto) calculates per-batch token budgets from text length, avoiding oversized KV caches
 
@@ -283,6 +287,7 @@ Text is automatically split into chunks at sentence boundaries. Each chunk is pr
 - `max_context_batches`: Number of previous batches to keep as context for voice consistency (0 = unlimited, 3 = recommended for 8-12GB VRAM, higher = better consistency but more VRAM)
 - `max_words_per_chunk`: Maximum words per chunk when splitting text (50-400, lower = more chunks with better granularity)
 - `enable_warmup`: Run a warmup inference before main TTS to avoid OOM on low-VRAM GPUs (recommended for BNB models on 8GB)
+- `low_vram_mode`: **NEW** — Enable aggressive memory optimization for 8GB GPUs. Offloads decoder to CPU during LLaMA generation, then offloads LLaMA before decoding. Slower but prevents OOM. Automatically enabled for texts > 500 chars.
 - `offload_to_cpu`: Move model to CPU after generation to free VRAM while avoiding full reload penalty
 - `reference_audio` (optional): Reference audio to clone voice from (10-30 seconds)
 - `reference_text` (optional): Transcript of reference audio for improved cloning accuracy
@@ -290,7 +295,14 @@ Text is automatically split into chunks at sentence boundaries. Each chunk is pr
 **Outputs:**
 - `audio`: Generated long-form speech (AUDIO)
 
-> **Tips:**
+> **Tips for 8GB GPUs (RTX 2070/3070, etc.):**
+> - Use `s2-pro-bnb-nf4` model
+> - Set `precision=auto` (auto-selects float16 for Turing/Ampere)
+> - Enable `low_vram_mode=True`
+> - Enable `enable_warmup=True`
+> - Set `max_context_batches=1` or `2`
+>
+> **Tips for all GPUs:**
 > - For 4+ minute texts, increase `chunk_length` (400-800) to reduce the number of chunks and improve voice consistency
 > - Set `max_context_batches=0` only if you have ample VRAM — unlimited context can OOM on very long texts
 > - If audio quality degrades towards the end, increase `max_context_batches` or `chunk_length`
@@ -364,7 +376,7 @@ ComfyUI/
 
 | Parameter | Description | Recommended |
 |-----------|-------------|-------------|
-| **precision** | Model precision | `bfloat16` (CUDA), `float32` (CPU/MPS) |
+| **precision** | Model precision | `auto` (auto-detects GPU capability — bfloat16 for RTX 30+, float16 for RTX 20/GTX 16), `float32` (CPU/MPS) |
 | **attention** | Attention mechanism | `auto` (default), `sage_attention` (fastest, requires package) |
 | **keep_model_loaded** | Cache model | `True` for multiple runs |
 | **chunk_length**  | `200` (balanced), `100` (faster), `400-800` (long-form, fewer chunks) |
@@ -433,12 +445,23 @@ If you see `ImportError: cannot import name 'AUDIO_EXTENSIONS' from 'fish_speech
 
 ### Out of Memory?
 
-- Use `bfloat16` precision instead of `float32`
+- Use `precision=auto` (automatically selects float16 for RTX 20/GTX 16 series)
+- Use `s2-pro-bnb-nf4` model for 8-16GB GPUs
+- Enable `low_vram_mode=True` (for 8GB GPUs)
+- Enable `enable_warmup=True`
 - Set `keep_model_loaded=False`
 - Reduce `chunk_length`
 - Close other applications
-- For long-form: lower `max_context_batches` to 2-3, or enable `offload_to_cpu`
-- For long-form: use FP8 or BNF NF4 quantized model to fit on 16-20GB GPUs
+- For long-form: lower `max_context_batches` to 1-2, or enable `offload_to_cpu`
+- For long-form: use FP8 or BNB NF4 quantized model to fit on 16-20GB GPUs
+
+### RTX 20 / GTX 16 Series (Turing) OOM?
+
+These GPUs don't support bfloat16 natively. As of v0.4.1, `precision=auto` automatically detects this and falls back to float16. If you still get OOM:
+- Make sure `precision=auto` or explicitly set `precision=float16`
+- Use `s2-pro-bnb-nf4` model
+- Enable `low_vram_mode=True`
+- Enable `enable_warmup=True`
 
 ### Slow Synthesis?
 

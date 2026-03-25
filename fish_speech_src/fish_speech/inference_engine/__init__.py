@@ -84,13 +84,13 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
         segments = []
         deferred_codes = []
         decoder_device = self.decoder_model.device
-        is_longform = len(req.text) > 500 and not req.streaming
+        use_cpu_offload = req.low_vram_mode or (len(req.text) > 500 and not req.streaming)
 
-        if is_longform and decoder_device.type == "cuda":
+        if use_cpu_offload and decoder_device.type == "cuda":
             self.decoder_model.to("cpu")
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            logger.info("Long-form: decoder offloaded to CPU during LLaMA generation")
+            logger.info("Low-VRAM mode: decoder offloaded to CPU during LLaMA generation")
 
         while True:
             wrapped_result = None
@@ -124,7 +124,7 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
 
             result: GenerateResponse = wrapped_result.response
             if result.action != "next":
-                if is_longform:
+                if use_cpu_offload:
                     deferred_codes.append(result.codes.cpu())
                     yield InferenceResult(
                         code="segment",
@@ -144,7 +144,22 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
                 break
 
         if deferred_codes:
+            offload_resp = queue.Queue()
+            self.llama_queue.put(
+                GenerateRequest(
+                    request={"__offload__": "cpu"},
+                    response_queue=offload_resp,
+                )
+            )
+            try:
+                offload_resp.get(timeout=30)
+                logger.info("Long-form: LLaMA offloaded to CPU, bringing decoder to GPU...")
+            except queue.Empty:
+                logger.warning("Long-form: LLaMA offload timed out, proceeding with caution.")
+            
             self.decoder_model.to(decoder_device)
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             logger.info(f"Long-form: decoding {len(deferred_codes)} segments")
             for codes in deferred_codes:
                 segment = self._decode_codes(codes)

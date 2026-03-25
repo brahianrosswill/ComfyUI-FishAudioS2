@@ -241,11 +241,33 @@ def resolve_model_path(name: str) -> Path:
     return path
 
 
+def _supports_bfloat16() -> bool:
+    """Check if the current CUDA device supports bfloat16 natively.
+    
+    Bfloat16 requires compute capability >= 8.0 (Ampere/RTX 30 series or newer).
+    RTX 20 series (Turing, cc 7.5) and GTX 16 series (Turing, cc 7.5) do not.
+    """
+    if not torch.cuda.is_available():
+        return False
+    try:
+        major, minor = torch.cuda.get_device_capability()
+        return major >= 8
+    except Exception:
+        return False
+
+
 def resolve_device(device_choice: str) -> tuple[str, torch.dtype]:
     """Return (device_str, dtype) for the user's device selection."""
     if device_choice == "auto":
         if torch.cuda.is_available():
-            return "cuda", torch.bfloat16
+            dtype = torch.bfloat16 if _supports_bfloat16() else torch.float16
+            if dtype == torch.float16:
+                logger.info(
+                    "GPU does not support bfloat16 (compute capability < 8.0) — "
+                    "using float16 instead. For best results, explicitly set "
+                    "precision to 'float16'."
+                )
+            return "cuda", dtype
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
             return "mps", torch.float16
         logger.warning(
@@ -257,7 +279,12 @@ def resolve_device(device_choice: str) -> tuple[str, torch.dtype]:
         )
         return "cpu", torch.float32
     if device_choice == "cuda":
-        return "cuda", torch.bfloat16
+        dtype = torch.bfloat16 if _supports_bfloat16() else torch.float16
+        if dtype == torch.float16:
+            logger.info(
+                "GPU does not support bfloat16 — using float16 for CUDA device."
+            )
+        return "cuda", dtype
     if device_choice == "mps":
         return "mps", torch.float16
     return "cpu", torch.float32
@@ -267,23 +294,34 @@ def resolve_precision(precision_choice: str, model_name: str, device: str) -> to
     """
     Resolve precision to torch.dtype based on choice, model type, and device.
     
-    - 'auto': bfloat16 for full model on CUDA, float16 for quantized model on CUDA
+    - 'auto': bfloat16 for full model on CUDA (if supported), float16 otherwise
     - Otherwise use the specified precision
     """
     if precision_choice == "auto":
         is_fp8      = "fp8" in model_name.lower()
-        is_quantized = any(x in model_name.lower() for x in ["int4", "4bit"])
+        is_quantized = any(x in model_name.lower() for x in ["int4", "4bit", "nf4", "int8"])
 
         if device == "cuda":
+            supports_bf16 = _supports_bfloat16()
             if is_fp8:
-                # FP8 weights are self-scaling; activations run in bfloat16
-                logger.info("Auto-detected FP8 model — using bfloat16 for activations")
-                return torch.bfloat16
+                if supports_bf16:
+                    logger.info("Auto-detected FP8 model — using bfloat16 for activations")
+                    return torch.bfloat16
+                else:
+                    logger.info("Auto-detected FP8 model — using float16 for activations (no bfloat16 support)")
+                    return torch.float16
             if is_quantized:
                 logger.info("Auto-detected quantized model — using float16")
                 return torch.float16
-            logger.info("Auto-detected full model — using bfloat16")
-            return torch.bfloat16
+            if supports_bf16:
+                logger.info("Auto-detected full model — using bfloat16")
+                return torch.bfloat16
+            else:
+                logger.info(
+                    "Auto-detected full model — using float16 "
+                    "(GPU compute capability < 8.0, no bfloat16 support)"
+                )
+                return torch.float16
         elif device == "mps":
             return torch.float16
         else:
@@ -291,6 +329,11 @@ def resolve_precision(precision_choice: str, model_name: str, device: str) -> to
     
     # Explicit precision choices
     if precision_choice == "bfloat16":
+        if device == "cuda" and not _supports_bfloat16():
+            logger.warning(
+                "bfloat16 requested but GPU does not support it (compute capability < 8.0). "
+                "This may cause OOM or errors. Consider using 'float16' instead."
+            )
         return torch.bfloat16
     if precision_choice == "float16":
         return torch.float16

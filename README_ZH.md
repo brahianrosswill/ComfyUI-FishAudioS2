@@ -51,11 +51,12 @@
 ## 💻 系统要求
 
 - **GPU：** NVIDIA 显卡，完整模型需 **24GB+ 显存**（RTX 3090/4090、A5000 等）
+  - **8GB 显存** 可使用 **BNB NF4** + **low_vram_mode**（由于 CPU 卸载，速度较慢）
   - **16GB+ 显存** 可使用 **BNB NF4 4位实时量化**（约 10-11 it/s）
-  - **CPU/MPS：** 约 1.5-2 秒/token（实验性）
   - **18GB+ 显存** 可使用 **BNB INT8 实时量化**（约 10-11 it/s）
-  - **20GB+ 显存** 可使用 **FP8 量化模型**（`s2-pro-fp8`，约 11 it/s，需要 RTX 4090/5090 或 Ada/Blackwell 显卡）
-- **CPU/MPS：** 支持但速度明显较慢
+  - **20GB+ 显存** 可使用 **FP8 量化模型**（`s2-pro-fp8`，约 15 it/s，需要 RTX 4090/5090 或 Ada/Blackwell 显卡）
+- **RTX 20 / GTX 16 系列（Turing）：** 自动检测并回退到 `float16` — 使用 `precision=auto`
+- **CPU/MPS：** 约 1.5-2 秒/token（实验性）
 - **Python：** 3.10+
 - **CUDA：** 11.8+（GPU 推理）
 
@@ -80,6 +81,7 @@
 | **s2-pro-fp8** | ~20GB | ~15 it/s | FP8 逐行缩放量化 — **推荐用于 20GB+ Ada/Blackwell 显卡**（RTX 4090/5090），无需额外依赖 |
 | **BNB INT8** | ~18GB | ~10-11 it/s | 通过 bitsandbytes 实时 INT8 量化 — 使用 s2-pro 模型，需要 bitsandbytes |
 | **BNB NF4** | ~16GB | ~10-11 it/s | 通过 bitsandbytes 实时 4位 NF4 量化 — 使用 s2-pro 模型，需要 bitsandbytes |
+| **BNB NF4 + low_vram_mode** | ~8GB | 较慢 | **适用于 8GB 显卡（RTX 2070/3070 等）** — 启用激进 CPU 卸载以防止 OOM |
 
 首次使用时自动从 HuggingFace 下载模型：
 - [fishaudio/s2-pro](https://huggingface.co/fishaudio/s2-pro) — 完整模型
@@ -204,7 +206,7 @@ pip install -r requirements.txt
 - `text`：要合成的文本，可带 `[标签]` 情感标记
 - `language`：语言提示（`auto`、`en`、`zh`、`ja`、`ko` 等）
 - `device`：计算设备（`auto`、`cuda`、`cpu`、`mps`）
-- `precision`：模型精度（`auto`、`bfloat16`、`float16`、`float32`）
+- `precision`：模型精度（`auto` 自动检测显卡能力 — RTX 30+ 选 bfloat16，RTX 20/GTX 16 选 float16，或明确设置 `bfloat16`、`float16`、`float32`）
 - `attention`：注意力内核（`auto`、`sdpa`、`sage_attention`、`flash_attention`）
 - `max_new_tokens`：最大声学 token 数（0 = 自动）
 - `chunk_length`：流式分块长度（100-800）
@@ -266,8 +268,10 @@ pip install -r requirements.txt
 文本自动按句子边界分割为多个块。每个块处理时会参考前面块的内容（由 `max_context_batches` 控制），以保持声音质量的一致性。可选从参考音频克隆声音。
 
 **显存优化：**
-- 滑动窗口在生成**之前**（而非之后）裁剪上下文，保持提示词简短，注意力计算更快
-- DAC 解码器在 LLaMA 生成期间卸载到 CPU，仅在最后一次性解码所有音频段
+- **自动精度检测：** RTX 20/GTX 16 系列（Turing）自动回退到 `float16` — 防止 8GB 显卡 OOM
+- **滑动窗口**在生成**之前**（而非之后）裁剪上下文，保持提示词简短，注意力计算更快
+- **DAC 解码器卸载**到 CPU 在 LLaMA 生成期间 — 仅在解码阶段加载回来
+- **LLaMA 卸载**到 CPU 在解码器重新加载之前 — 防止两个模型同时需要显存时 OOM
 - 每个批次之间运行 `gc.collect()` + `torch.cuda.empty_cache()` 回收已释放的显存
 - `max_new_tokens=0`（自动）根据文本长度按批次计算 token 预算，避免 KV 缓存过大
 
@@ -276,6 +280,7 @@ pip install -r requirements.txt
 - `max_context_batches`：保留的上下文批次数量，用于保持声音一致性（0 = 无限制，3 = 推荐，适合 8-12GB 显存，越高一致性越好但占用更多显存）
 - `max_words_per_chunk`：分块最大词数（50-400，越低 = 更多分块，粒度更细）
 - `enable_warmup`：在主合成前运行预热推理，避免低显存 GPU 出现 OOM（推荐 BNB 模型在 8GB 显卡上开启）
+- `low_vram_mode`：**新增** — 为 8GB 显卡启用激进内存优化。在 LLaMA 生成期间将解码器卸载到 CPU，解码前卸载 LLaMA。较慢但防止 OOM。文本超过 500 字符时自动启用。
 - `offload_to_cpu`：生成后将模型移至 CPU 以释放显存，同时避免完全重新加载的开销
 - `reference_audio`（可选）：要克隆的参考音频（10-30 秒）
 - `reference_text`（可选）：参考音频的文字稿，提高克隆准确性
@@ -283,7 +288,14 @@ pip install -r requirements.txt
 **输出：**
 - `audio`：生成的长文本语音（AUDIO）
 
-> **提示：**
+> **8GB 显卡提示（RTX 2070/3070 等）：**
+> - 使用 `s2-pro-bnb-nf4` 模型
+> - 设置 `precision=auto`（自动为 Turing/Ampere 选择 float16）
+> - 开启 `low_vram_mode=True`
+> - 开启 `enable_warmup=True`
+> - 设置 `max_context_batches=1` 或 `2`
+>
+> **通用提示：**
 > - 对于 4 分钟以上的文本，增大 `chunk_length`（400-800）以减少分块数量，提高声音一致性
 > - 仅在显存充裕时设置 `max_context_batches=0`——无限制上下文在超长文本上可能导致 OOM
 > - 如果音频质量在末尾明显下降，增大 `max_context_batches` 或 `chunk_length`
@@ -357,7 +369,7 @@ ComfyUI/
 
 | 参数 | 描述 | 推荐值 |
 |------|------|--------|
-| **precision** | 模型精度 | `auto`（自动），`bfloat16`（CUDA），`float32`（CPU/MPS） |
+| **precision** | 模型精度 | `auto`（自动检测显卡能力 — RTX 30+ 选 bfloat16，RTX 20/GTX 16 选 float16），`float32`（CPU/MPS） |
 | **attention** | 注意力机制 | `auto`（默认），`sage_attention`（最快，需安装） |
 | **keep_model_loaded** | 缓存模型 | 多次运行时设为 `True` |
 | **chunk_length** | 分块长度 | `200`（平衡），`100`（更快），`400-800`（长文本，更少分块） |
@@ -426,12 +438,23 @@ pip install "descript-audiotools>=0.7.2" --no-deps
 
 ### 显存不足？
 
-- 使用 `bfloat16` 精度而非 `float32`
+- 使用 `precision=auto`（自动为 RTX 20/GTX 16 系列选择 float16）
+- 使用 `s2-pro-bnb-nf4` 模型（适合 8-16GB 显存）
+- 开启 `low_vram_mode=True`（8GB 显卡）
+- 开启 `enable_warmup=True`
 - 设置 `keep_model_loaded=False`
 - 减少 `chunk_length`
 - 关闭其他应用程序
-- 长文本：降低 `max_context_batches` 至 2-3，或开启 `offload_to_cpu`
+- 长文本：降低 `max_context_batches` 至 1-2，或开启 `offload_to_cpu`
 - 长文本：使用 FP8 或 BNB NF4 量化模型以适配 16-20GB 显存
+
+### RTX 20 / GTX 16 系列（Turing）OOM？
+
+这些显卡不支持 bfloat16 硬件加速。自 v0.4.1 起，`precision=auto` 会自动检测并回退到 float16。如果仍然 OOM：
+- 确保 `precision=auto` 或明确设置 `precision=float16`
+- 使用 `s2-pro-bnb-nf4` 模型
+- 开启 `low_vram_mode=True`
+- 开启 `enable_warmup=True`
 
 ### 合成速度慢？
 
