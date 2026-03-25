@@ -1,15 +1,16 @@
 """ComfyUI custom nodes for Fish Audio S2-Pro TTS.
 
-Provides three nodes:
+Provides four nodes:
   - FishS2TTS             — text → speech, 80+ languages, inline emotion tags
   - FishS2VoiceCloneTTS   — reference audio + text → cloned-voice speech
   - FishS2MultiSpeakerTTS — multi-speaker conversation synthesis in one pass
+  - FishS2MultiSpeakerSplitTTS — multi-speaker with per-speaker audio outputs
 
 Required pip packages are auto-installed on startup.
 Model weights are auto-downloaded from HuggingFace on first inference.
 """
 
-__version__ = "0.4.3"
+__version__ = "0.4.4"
 
 import importlib
 import logging
@@ -276,17 +277,20 @@ if _ensure_fish_source() and _ensure_dependencies():
         from .nodes.tts_node import FishS2TTS
         from .nodes.voice_clone_node import FishS2VoiceCloneTTS
         from .nodes.multi_speaker_node import FishS2MultiSpeakerTTS
+        from .nodes.multi_speaker_split_node import FishS2MultiSpeakerSplitTTS
 
         NODE_CLASS_MAPPINGS = {
             "FishS2TTS": FishS2TTS,
             "FishS2VoiceCloneTTS": FishS2VoiceCloneTTS,
             "FishS2MultiSpeakerTTS": FishS2MultiSpeakerTTS,
+            "FishS2MultiSpeakerSplitTTS": FishS2MultiSpeakerSplitTTS,
         }
 
         NODE_DISPLAY_NAME_MAPPINGS = {
             "FishS2TTS": "Fish S2 TTS",
             "FishS2VoiceCloneTTS": "Fish S2 Voice Clone TTS",
             "FishS2MultiSpeakerTTS": "Fish S2 Multi-Speaker TTS",
+            "FishS2MultiSpeakerSplitTTS": "Fish S2 Multi-Speaker Split TTS",
         }
 
         logger.info(

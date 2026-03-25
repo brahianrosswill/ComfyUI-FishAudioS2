@@ -29,6 +29,7 @@
 - **零样本声音克隆** - 仅需 10-30 秒参考音频
 - **内联情感/韵律控制** - 使用 `[标签]` 语法
 - **多说话人对话合成** - 单次生成多角色对话
+- **独立说话人音轨分离** - 适用于多角色口型同步工作流
 - **83 种语言支持** - 自动检测语言
 
 ---
@@ -39,6 +40,7 @@
 - **🎭 1500+ 情感标签** – 细粒度控制：`[laugh]`、`[whisper]`、`[excited]`、`[sad]` 等
 - **🌍 83 种语言** – 无需音素预处理的全多语言支持
 - **👥 多说话人 TTS** – 一次生成多个克隆声音的对话
+- **🔊 独立说话人音轨** – 每个说话人单独音轨输出（口型同步工作流）
 - **🔗 原生 ComfyUI 集成** – AUDIO 连接输入、进度条、中断支持
 - **⚡ 性能优化** – 支持 bf16/fp16/fp32、SDPA、FlashAttention、SageAttention
 - **📦 智能自动下载** – 首次使用时自动从 HuggingFace 下载模型权重
@@ -154,6 +156,7 @@ pip install -r requirements.txt
 | **Fish S2 TTS** | 带内联情感标签的文本转语音 |
 | **Fish S2 Voice Clone TTS** | 从参考音频克隆声音 |
 | **Fish S2 Multi-Speaker TTS** | 多说话人对话合成 |
+| **Fish S2 Multi-Speaker Split TTS** | 多说话人对话合成，输出独立说话人音轨 |
 
 ### 基础工作流
 
@@ -245,6 +248,32 @@ pip install -r requirements.txt
 
 **输出：**
 - `audio`：生成的多说话人对话（AUDIO）
+
+---
+
+### Fish S2 Multi-Speaker Split TTS
+
+多说话人对话合成，输出每个说话人的独立音轨。非常适合多角色口型同步工作流（如 Infinite Talk）。
+
+**输入：**
+- 与 Fish S2 Multi-Speaker TTS 相同
+
+**文本格式：**
+```
+[speaker_1]:你好，我是说话人一。
+[speaker_2]:我是说话人二！
+[speaker_1]:[laugh] 很高兴认识你。
+```
+
+**输出：**
+- `audio`：合并的多说话人对话（AUDIO）
+- `speaker_1_audio` 至 `speaker_10_audio`：每个说话人的独立音轨（AUDIO）
+  - 每个说话人的音轨在说话时有语音，不说话时为静音
+  - 所有音轨长度与合并音频相同
+
+> **使用场景：** 将独立说话人输出连接到不同的口型同步节点，实现多角色动画。
+
+> **致谢：** 独立说话人音轨分离想法由 [@lazybuttalented](https://github.com/lazybuttalented) 提出。本实现为独立开发。
 
 ---
 

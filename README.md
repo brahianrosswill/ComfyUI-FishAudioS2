@@ -38,6 +38,7 @@ This ComfyUI wrapper provides native node-based integration with:
 - **Zero-shot voice cloning** from 10-30 second reference audio
 - **Inline emotion/prosody control** with `[tag]` syntax
 - **Multi-speaker conversation synthesis** in a single pass
+- **Per-speaker audio isolation** for multi-speaker lip sync workflows
 - **83 language support** with automatic detection
 
 ---
@@ -48,6 +49,7 @@ This ComfyUI wrapper provides native node-based integration with:
 - ** 1500+ Emotive Tags** – Fine-grained control with `[laugh]`, `[whisper]`, `[excited]`, `[sad]`, etc.
 - ** 83 Languages** – Full multilingual support without phoneme preprocessing
 - ** Multi-Speaker TTS** – Generate conversations with multiple cloned voices in one pass
+- ** Per-Speaker Audio Isolation** – Separate audio tracks for each speaker (lip sync workflows)
 - ** Native ComfyUI Integration** – AUDIO noodle inputs, progress bars, interruption support
 - ** Optimized Performance** – Support for bf16/fp16/fp32 dtypes, SDPA, FlashAttention, SageAttention
 - ** Smart Auto-Download** – Model weights auto-downloaded from HuggingFace on first use
@@ -163,6 +165,7 @@ pip install -r requirements.txt
 | **Fish S2 TTS** | Text-to-speech with inline emotion tags |
 | **Fish S2 Voice Clone TTS** | Voice cloning from reference audio + text |
 | **Fish S2 Multi-Speaker TTS** | Multi-speaker conversation synthesis |
+| **Fish S2 Multi-Speaker Split TTS** | Multi-speaker with per-speaker audio outputs |
 
 ### Basic Workflow
 
@@ -252,6 +255,31 @@ Multi-speaker conversation synthesis.
 
 **Outputs:**
 - `audio`: Generated multi-speaker conversation (AUDIO)
+
+---
+
+### Fish S2 Multi-Speaker Split TTS
+
+Multi-speaker conversation synthesis with separate audio tracks for each speaker. Perfect for multi-speaker lip sync workflows (e.g., Infinite Talk).
+
+**Inputs:**
+- Same as Fish S2 Multi-Speaker TTS
+
+**Text Format:**
+```
+[speaker_1]: Hello, I'm speaker one.
+[speaker_2]: And I'm speaker two!
+```
+
+**Outputs:**
+- `audio`: Combined multi-speaker conversation (AUDIO)
+- `speaker_1_audio` through `speaker_10_audio`: Isolated audio for each speaker (AUDIO)
+  - Each speaker's track contains their speech when talking, silence otherwise
+  - All tracks are the same length as the combined audio
+
+> **Use Case:** Connect individual speaker outputs to separate lip sync nodes for multi-character animation.
+
+> **Credit:** Per-speaker audio isolation idea suggested by [@lazybuttalented](https://github.com/lazybuttalented). This is an independent implementation.
 
 ---
 
