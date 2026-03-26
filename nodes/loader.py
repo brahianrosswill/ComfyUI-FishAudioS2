@@ -492,19 +492,25 @@ def load_engine(
     # load a new model — prevents both models sitting in RAM simultaneously.
     engine._llama_thread = llama_thread
 
-    # Detect if VBAR (ComfyUI Dynamic VRAM) will be active for this engine.
-    # The actual VBAR setup happens in the worker thread, but we need to
-    # know here so the inference engine can skip manual decoder offloading.
+    # Detect memory management mode for the inference engine.
+    # VBAR explicit: per-layer weight swapping via aimdo VBAR API
+    # Aimdo auto: aimdo's custom CUDA allocator handles eviction
+    # Fallback: manual .to("cpu") ping-pong
     engine._vbar_active = False
+    engine._aimdo_auto = False
     if device_str == "cuda" and bnb_mode is None:
         try:
-            from fish_speech.models.text2semantic.vbar_offload import is_vbar_available
+            from fish_speech.models.text2semantic.vbar_offload import (
+                is_vbar_available,
+                is_aimdo_available,
+            )
 
-            engine._vbar_active = is_vbar_available()
-            if engine._vbar_active:
-                logger.info(
-                    "ComfyUI Dynamic VRAM (VBAR) detected — will use demand-offloading"
-                )
+            if is_vbar_available():
+                engine._vbar_active = True
+                logger.info("ComfyUI Dynamic VRAM (VBAR explicit) — per-layer swap")
+            elif is_aimdo_available():
+                engine._aimdo_auto = True
+                logger.info("ComfyUI Dynamic VRAM (auto-allocator) — no manual offload")
         except Exception:
             pass
 

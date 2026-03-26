@@ -72,10 +72,10 @@ def offload_engine_to_cpu() -> None:
 
     engine = _cached_engine
 
-    # When VBAR (Dynamic VRAM) is active, skip manual offloading — the
-    # allocator handles weight placement automatically.
-    if getattr(engine, "_vbar_active", False):
-        logger.info("VBAR active — skipping manual CPU offload, allocator manages VRAM")
+    # When VBAR or aimdo auto-allocator is active, skip manual offloading.
+    if getattr(engine, "_vbar_active", False) or getattr(engine, "_aimdo_auto", False):
+        mode = "VBAR" if getattr(engine, "_vbar_active", False) else "aimdo auto"
+        logger.info(f"{mode} active — skipping manual CPU offload")
         return
     decoder_ok = False
     llama_ok = False

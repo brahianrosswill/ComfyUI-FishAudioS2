@@ -248,6 +248,10 @@ def decode_one_token_ar(
 
     a = main_token_normal - model.config.semantic_begin_id
     a = torch.clamp(a, min=0, max=model.config.codebook_size - 1)
+
+    _vbar_ctx = getattr(model, "_vbar_manager", None)
+    if _vbar_ctx is not None:
+        _vbar_ctx.swap_in_module(model.fast_embeddings, "fast_embeddings")
     hidden_states = model.fast_embeddings(a)
     codebook_out[1] = a
 
@@ -258,6 +262,9 @@ def decode_one_token_ar(
         a = sample(logits, temperature=temperature, top_p=top_p, top_k=top_k)[0]
         hidden_states = model.fast_embeddings(a)
         codebook_out[codebook_idx + 1] = a
+
+    if _vbar_ctx is not None:
+        _vbar_ctx.swap_out_module(model.fast_embeddings, "fast_embeddings")
 
     del logits, hidden_states, forward_result
 
@@ -912,16 +919,20 @@ def launch_thread_safe_queue(
             checkpoint_path, device, precision, compile=compile, bnb_mode=bnb_mode
         )
 
-        # Initialize VBAR (ComfyUI Dynamic VRAM) if available.
-        # When VBAR is active, model weights are demand-offloaded automatically
-        # and the manual .to("cpu") offload path is skipped.
+        # Three memory management paths:
+        # 1. VBAR explicit (aimdo VBAR API) — per-layer weight swapping
+        # 2. Aimdo auto-allocator — no manual offload, aimdo handles eviction
+        # 3. Manual fallback — .to("cpu") ping-pong (always used for BNB)
         _vbar_mgr = None
         _use_vbar = False
+        _aimdo_auto = False
+
         if device == "cuda" and bnb_mode is None:
             try:
                 from fish_speech.models.text2semantic.vbar_offload import (
                     VBARWeightManager,
                     is_vbar_available,
+                    is_aimdo_available,
                 )
 
                 if is_vbar_available():
@@ -932,10 +943,18 @@ def launch_thread_safe_queue(
                     _vbar_mgr.prepare_model(model)
                     model._vbar_manager = _vbar_mgr
                     _use_vbar = True
-                    logger.info("VBAR (Dynamic VRAM) enabled for LLaMA model")
+                    logger.info(
+                        "VBAR explicit mode: model on CPU, per-layer GPU swap via aimdo"
+                    )
+                elif is_aimdo_available():
+                    model._aimdo_auto = True
+                    _aimdo_auto = True
+                    logger.info(
+                        "Aimdo auto-allocator active: no manual offload, "
+                        "aimdo handles weight eviction"
+                    )
             except Exception as e:
-                logger.warning(f"VBAR init failed, using manual offload: {e}")
-                _use_vbar = False
+                logger.warning(f"VBAR/aimdo detection failed: {e}")
         # KV cache is NOT pre-allocated here.  It is allocated lazily in
         # generate() sized to each request's actual T_new (prompt + max_new_tokens).
         # This avoids reserving the full 32k * n_heads * head_dim * n_layers
@@ -954,9 +973,9 @@ def launch_thread_safe_queue(
             if "__offload__" in kwargs:
                 target_device = kwargs["__offload__"]
 
-                # When VBAR is active, the allocator handles weight placement.
-                # We only need to move the KV cache and small tensors.
-                if _use_vbar:
+                # When VBAR or aimdo auto-allocator is active,
+                # skip manual weight offload — the allocator handles it.
+                if _use_vbar or _aimdo_auto:
                     logger.info(
                         f"VBAR active — skipping manual weight offload to {target_device}"
                     )

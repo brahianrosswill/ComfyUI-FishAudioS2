@@ -84,16 +84,25 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
         deferred_codes = []
         decoder_device = self.decoder_model.device
 
-        # Check if VBAR (Dynamic VRAM) is managing the LLaMA model.
         _vbar_active = getattr(self, "_vbar_active", False)
+        _aimdo_auto = getattr(self, "_aimdo_auto", False)
+
+        # Skip manual offloading when VBAR or aimdo auto-allocator is active.
+        # - VBAR: weights managed explicitly per-layer via VBAR
+        # - Aimdo auto: weights managed by aimdo's custom CUDA allocator
+        # - Fallback: manual .to("cpu") ping-pong
         use_cpu_offload = (
-            req.low_vram_mode or (len(req.text) > 500 and not req.streaming)
-        ) and not _vbar_active
+            (req.low_vram_mode or (len(req.text) > 500 and not req.streaming))
+            and not _vbar_active
+            and not _aimdo_auto
+        )
 
         if _vbar_active:
             logger.info(
-                "VBAR active — decoder stays on GPU, LLaMA weights managed by allocator"
+                "VBAR explicit mode — decoder stays on GPU, LLaMA via VBAR swap"
             )
+        elif _aimdo_auto:
+            logger.info("Aimdo auto-allocator active — no manual offload")
 
         if use_cpu_offload and decoder_device.type == "cuda":
             self.decoder_model.to("cpu")

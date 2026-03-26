@@ -461,14 +461,18 @@ def _remap_fish_qwen3_omni_keys(weights: OrderedDict) -> OrderedDict:
 def _run_layers_with_vbar(
     model, layers, x, *args, prefix="layers", use_checkpoint=False, **kwargs
 ):
-    """Run transformer layers with VBAR fault/unpin if a VBAR manager is set.
+    """Run transformer layers with VBAR swap-in/swap-out.
 
-    When model._vbar_manager is None this is equivalent to the plain for-loop.
-    When it is set, each layer's weights are faulted in before execution and
-    unpinned after, allowing Dynamic VRAM to evict weights under pressure.
+    Three paths:
+    - model._vbar_manager set → proper per-layer VBAR weight swapping
+    - model._aimdo_auto set → normal forward (aimdo auto-allocator handles eviction)
+    - neither → normal forward (manual offloading handles memory)
     """
     vbar_mgr = getattr(model, "_vbar_manager", None)
+    aimdo_auto = getattr(model, "_aimdo_auto", False)
+
     if vbar_mgr is None:
+        # Auto-allocator or fallback — just run normally
         for layer in layers:
             if use_checkpoint:
                 x = checkpoint(layer, x, *args, use_reentrant=True, **kwargs)
@@ -476,17 +480,87 @@ def _run_layers_with_vbar(
                 x = layer(x, *args, **kwargs)
         return x
 
+    # VBAR explicit path: swap weights per layer
     for i, layer in enumerate(layers):
         layer_name = f"{prefix}.{i}"
-        vbar_mgr.fault_layer_weights(layer_name)
+        vbar_mgr.swap_in_layer(layer, layer_name)
         try:
             if use_checkpoint:
                 x = checkpoint(layer, x, *args, use_reentrant=True, **kwargs)
             else:
                 x = layer(x, *args, **kwargs)
         finally:
-            vbar_mgr.unpin_layer_weights(layer_name)
+            vbar_mgr.swap_out_layer(layer, layer_name)
     return x
+
+
+from contextlib import contextmanager as _ctx_mgr
+
+
+@_ctx_mgr
+def _vbar_swap_non_layer(model, weight_names):
+    """Context manager to swap in non-layer weights (embeddings, norm, output).
+
+    Only active when model._vbar_manager is set. Otherwise a no-op.
+    """
+    vbar_mgr = getattr(model, "_vbar_manager", None)
+    if vbar_mgr is None:
+        yield
+        return
+
+    try:
+        from fish_speech.models.text2semantic.vbar_offload import (
+            vbar_fault as _vf,
+            vbar_unpin as _vu,
+            vbar_signature_compare as _vsc,
+        )
+        import comfy_aimdo
+    except ImportError:
+        yield
+        return
+
+    import torch
+
+    device = torch.device(f"cuda:{vbar_mgr.device_index}")
+    swapped = []
+    try:
+        for wname in weight_names:
+            if wname not in vbar_mgr._vbar_ptrs:
+                continue
+            cpu = vbar_mgr._cpu_weights[wname]
+            ptr = vbar_mgr._vbar_ptrs[wname]
+            sig = _vf(ptr)
+            if sig is not None:
+                gpu_tensor = comfy_aimdo.torch.aimdo_to_tensor(ptr, device)
+                gpu_tensor = gpu_tensor.view(cpu.dtype).view(cpu.shape)
+                if not _vsc(sig, vbar_mgr._signatures.get(wname)):
+                    gpu_tensor.copy_(cpu)
+                    vbar_mgr._signatures[wname] = sig
+                _set_model_data(model, wname, gpu_tensor)
+                swapped.append(wname)
+            else:
+                _set_model_data(model, wname, cpu.to(device, non_blocking=True))
+                swapped.append(wname)
+        yield
+    finally:
+        for wname in swapped:
+            ptr = vbar_mgr._vbar_ptrs.get(wname)
+            if ptr is not None:
+                _vu(ptr)
+            _set_model_data(model, wname, vbar_mgr._cpu_weights[wname])
+
+
+def _set_model_data(model, dotted_name: str, tensor) -> None:
+    """Set .data on a parameter or buffer via a dotted attribute path."""
+    parts = dotted_name.split(".")
+    parent = model
+    for p in parts[:-1]:
+        parent = getattr(parent, p)
+    leaf = getattr(parent, parts[-1])
+    if isinstance(leaf, torch.nn.Parameter):
+        leaf.data = tensor
+    else:
+        parent.__dict__[parts[-1]] = tensor
 
 
 class BaseTransformer(nn.Module):
@@ -643,81 +717,92 @@ class BaseTransformer(nn.Module):
         return_all: bool = False,
     ) -> BaseTransformerForwardResult:
 
-        # Embedding logic replicated from embed() for compilation compatibility
-        embeds = []
-        for i in range(self.config.num_codebooks):
-            emb = self.codebook_embeddings(
-                inp[:, i + 1] + i * self.config.codebook_size
+        non_layer_weights = [
+            "embeddings.weight",
+            "codebook_embeddings.weight",
+            "norm.weight",
+        ]
+        if hasattr(self, "output") and hasattr(self.output, "weight"):
+            non_layer_weights.append("output.weight")
+        if hasattr(self, "score_output") and hasattr(self.score_output, "weight"):
+            non_layer_weights.append("score_output.weight")
+
+        with _vbar_swap_non_layer(self, non_layer_weights):
+            # Embedding logic replicated from embed() for compilation compatibility
+            embeds = []
+            for i in range(self.config.num_codebooks):
+                emb = self.codebook_embeddings(
+                    inp[:, i + 1] + i * self.config.codebook_size
+                )
+                embeds.append(emb)
+
+            vq_embeds_sum = torch.stack(embeds, dim=1).sum(dim=1)
+
+            vq_masks = (inp[:, 0] >= self.config.semantic_begin_id) & (
+                inp[:, 0] <= self.config.semantic_end_id
             )
-            embeds.append(emb)
 
-        vq_embeds_sum = torch.stack(embeds, dim=1).sum(dim=1)
+            vq_embeds_sum[~vq_masks] = 0
+            x = self.embeddings(inp[:, 0]) + vq_embeds_sum
 
-        vq_masks = (inp[:, 0] >= self.config.semantic_begin_id) & (
-            inp[:, 0] <= self.config.semantic_end_id
-        )
+            if self.config.scale_codebook_embeddings:
+                vq_masks_expanded = vq_masks.unsqueeze(-1).expand_as(x)
+                x = torch.where(
+                    vq_masks_expanded, x / math.sqrt(self.config.num_codebooks + 1), x
+                )
 
-        vq_embeds_sum[~vq_masks] = 0
-        x = self.embeddings(inp[:, 0]) + vq_embeds_sum
-
-        if self.config.scale_codebook_embeddings:
-            vq_masks_expanded = vq_masks.unsqueeze(-1).expand_as(x)
-            x = torch.where(
-                vq_masks_expanded, x / math.sqrt(self.config.num_codebooks + 1), x
-            )
-
-        # Audio embeddings
-        if audio_parts is not None:
-            # Note: This assumes self.audio_projector exists if audio_parts is used
-            # It seems missing in init, but we keep existing logic
-            if hasattr(self, "audio_projector"):
-                audio_embeds = self.audio_projector(audio_parts)
-                if self.config.scale_codebook_embeddings:
-                    x[audio_masks] = audio_embeds / math.sqrt(2)
+            # Audio embeddings
+            if audio_parts is not None:
+                if hasattr(self, "audio_projector"):
+                    audio_embeds = self.audio_projector(audio_parts)
+                    if self.config.scale_codebook_embeddings:
+                        x[audio_masks] = audio_embeds / math.sqrt(2)
+                    else:
+                        x[audio_masks] = audio_embeds
                 else:
-                    x[audio_masks] = audio_embeds
+                    logger.warning(
+                        "audio_parts provided but model has no audio_projector"
+                    )
+
+            if input_pos is None:
+                input_pos = torch.arange(inp.shape[-1], device=x.device)
+                max_seq_len = inp.shape[-1]
             else:
-                logger.warning("audio_parts provided but model has no audio_projector")
+                max_seq_len = self.max_seq_len
 
-        if input_pos is None:
-            input_pos = torch.arange(inp.shape[-1], device=x.device)
-            max_seq_len = inp.shape[-1]
-        else:
-            max_seq_len = self.max_seq_len
+            mask = self.causal_mask[None, None, input_pos, :max_seq_len]  # (B, N, Q, K)
+            freqs_cis = self.freqs_cis[input_pos]
 
-        mask = self.causal_mask[None, None, input_pos, :max_seq_len]  # (B, N, Q, K)
-        freqs_cis = self.freqs_cis[input_pos]
+            x = _run_layers_with_vbar(
+                self,
+                self.layers,
+                x,
+                freqs_cis,
+                mask,
+                input_pos=input_pos,
+                prefix="layers",
+            )
 
-        x = _run_layers_with_vbar(
-            self,
-            self.layers,
-            x,
-            freqs_cis,
-            mask,
-            input_pos=input_pos,
-            prefix="layers",
-        )
+            if x.size(1) > 1 and not return_all:
+                x = x[:, -1:]
 
-        if x.size(1) > 1 and not return_all:
-            x = x[:, -1:]
+            slow_out = self.norm(x)
 
-        slow_out = self.norm(x)
+            if self.config.is_reward_model:
+                token_logits = self.score_output(slow_out)
+            elif self.config.tie_word_embeddings:
+                token_logits = F.linear(slow_out, self.embeddings.weight)
+            else:
+                token_logits = self.output(slow_out)
 
-        if self.config.is_reward_model:
-            token_logits = self.score_output(slow_out)
-        elif self.config.tie_word_embeddings:
-            token_logits = F.linear(slow_out, self.embeddings.weight)
-        else:
-            token_logits = self.output(slow_out)
+            hidden_out = (
+                slow_out if getattr(self.config, "norm_fastlayer_input", False) else x
+            )
 
-        hidden_out = (
-            slow_out if getattr(self.config, "norm_fastlayer_input", False) else x
-        )
-
-        return BaseTransformerForwardResult(
-            logits=token_logits,
-            hidden_states=hidden_out,
-        )
+            return BaseTransformerForwardResult(
+                logits=token_logits,
+                hidden_states=hidden_out,
+            )
 
     def _init_weights(self, module):
         std = self.config.initializer_range
@@ -1121,29 +1206,37 @@ class DualARTransformer(BaseTransformer):
     def forward_generate_fast(
         self, x: Tensor, input_pos: Optional[Tensor] = None
     ) -> Tensor:
-        # Fast transformer
-        x = x.view(x.shape[0], 1, -1)
+        fast_non_layer = [
+            "fast_norm.weight",
+            "fast_output.weight",
+        ]
+        if hasattr(self, "fast_project_in") and hasattr(self.fast_project_in, "weight"):
+            fast_non_layer.append("fast_project_in.weight")
 
-        fast_mask = self.causal_mask[
-            None, None, input_pos, : self.config.num_codebooks
-        ]  # (B, N, Q, K)
-        fast_freqs_cis = self.fast_freqs_cis[input_pos]
+        with _vbar_swap_non_layer(self, fast_non_layer):
+            # Fast transformer
+            x = x.view(x.shape[0], 1, -1)
 
-        x = _run_layers_with_vbar(
-            self,
-            self.fast_layers,
-            x,
-            fast_freqs_cis,
-            fast_mask,
-            input_pos=input_pos,
-            prefix="fast_layers",
-        )
+            fast_mask = self.causal_mask[
+                None, None, input_pos, : self.config.num_codebooks
+            ]  # (B, N, Q, K)
+            fast_freqs_cis = self.fast_freqs_cis[input_pos]
 
-        # unflatten the batch and num_codebooks
-        fast_out = self.fast_norm(x)  # only take the last token
-        codebook_logits = self.fast_output(fast_out)
+            x = _run_layers_with_vbar(
+                self,
+                self.fast_layers,
+                x,
+                fast_freqs_cis,
+                fast_mask,
+                input_pos=input_pos,
+                prefix="fast_layers",
+            )
 
-        return codebook_logits
+            # unflatten the batch and num_codebooks
+            fast_out = self.fast_norm(x)  # only take the last token
+            codebook_logits = self.fast_output(fast_out)
+
+            return codebook_logits
 
     def forward_generate(
         self,
@@ -1152,8 +1245,13 @@ class DualARTransformer(BaseTransformer):
         audio_masks: Optional[Tensor] = None,
         audio_parts: Optional[Tensor] = None,
     ) -> TransformerForwardResult:
-        x = super().forward_generate(x, input_pos, audio_masks, audio_parts)
-        x.hidden_states = self.fast_project_in(x.hidden_states)
+        fast_weights = [
+            "fast_embeddings.weight",
+            "fast_project_in.weight",
+        ]
+        with _vbar_swap_non_layer(self, fast_weights):
+            x = super().forward_generate(x, input_pos, audio_masks, audio_parts)
+            x.hidden_states = self.fast_project_in(x.hidden_states)
         return x
 
 
