@@ -41,6 +41,7 @@ def _get_models_base() -> Path:
     """
     try:
         import folder_paths
+
         base = Path(folder_paths.models_dir) / MODELS_FOLDER_NAME
     except ImportError:
         # Outside ComfyUI (tests / standalone use)
@@ -58,6 +59,7 @@ def _register_folder():
     """
     try:
         import folder_paths
+
         base = str(_get_models_base())
         # add_model_folder_path is idempotent — safe to call repeatedly
         folder_paths.add_model_folder_path(MODELS_FOLDER_NAME, base)
@@ -146,10 +148,10 @@ def _is_model_downloaded(model_name: str) -> bool:
     base_name = HF_MODELS.get(model_name, {}).get("base_model", model_name)
     base = _get_models_base()
     model_path = base / base_name
-    
+
     if not model_path.is_dir():
         return False
-    
+
     has_config = (model_path / "config.json").is_file()
     has_weights = any(
         f.suffix in {".safetensors", ".pt", ".pth", ".ckpt"}
@@ -203,7 +205,7 @@ _AUTO_DOWNLOAD_SUFFIX = " (auto download)"
 def _strip_auto_download_suffix(name: str) -> str:
     """Remove ' (auto download)' suffix if present."""
     if name.endswith(_AUTO_DOWNLOAD_SUFFIX):
-        return name[:-len(_AUTO_DOWNLOAD_SUFFIX)]
+        return name[: -len(_AUTO_DOWNLOAD_SUFFIX)]
     return name
 
 
@@ -216,7 +218,7 @@ def resolve_model_path(name: str) -> Path:
     """
     # Strip the " (auto download)" suffix if present
     name = _strip_auto_download_suffix(name)
-    
+
     path = _get_models_base() / name
 
     if not path.is_dir() or not any(path.iterdir() if path.exists() else []):
@@ -243,7 +245,7 @@ def resolve_model_path(name: str) -> Path:
 
 def _supports_bfloat16() -> bool:
     """Check if the current CUDA device supports bfloat16 natively.
-    
+
     Bfloat16 requires compute capability >= 8.0 (Ampere/RTX 30 series or newer).
     RTX 20 series (Turing, cc 7.5) and GTX 16 series (Turing, cc 7.5) do not.
     """
@@ -290,25 +292,33 @@ def resolve_device(device_choice: str) -> tuple[str, torch.dtype]:
     return "cpu", torch.float32
 
 
-def resolve_precision(precision_choice: str, model_name: str, device: str) -> torch.dtype:
+def resolve_precision(
+    precision_choice: str, model_name: str, device: str
+) -> torch.dtype:
     """
     Resolve precision to torch.dtype based on choice, model type, and device.
-    
+
     - 'auto': bfloat16 for full model on CUDA (if supported), float16 otherwise
     - Otherwise use the specified precision
     """
     if precision_choice == "auto":
-        is_fp8      = "fp8" in model_name.lower()
-        is_quantized = any(x in model_name.lower() for x in ["int4", "4bit", "nf4", "int8"])
+        is_fp8 = "fp8" in model_name.lower()
+        is_quantized = any(
+            x in model_name.lower() for x in ["int4", "4bit", "nf4", "int8"]
+        )
 
         if device == "cuda":
             supports_bf16 = _supports_bfloat16()
             if is_fp8:
                 if supports_bf16:
-                    logger.info("Auto-detected FP8 model — using bfloat16 for activations")
+                    logger.info(
+                        "Auto-detected FP8 model — using bfloat16 for activations"
+                    )
                     return torch.bfloat16
                 else:
-                    logger.info("Auto-detected FP8 model — using float16 for activations (no bfloat16 support)")
+                    logger.info(
+                        "Auto-detected FP8 model — using float16 for activations (no bfloat16 support)"
+                    )
                     return torch.float16
             if is_quantized:
                 logger.info("Auto-detected quantized model — using float16")
@@ -326,7 +336,7 @@ def resolve_precision(precision_choice: str, model_name: str, device: str) -> to
             return torch.float16
         else:
             return torch.float32
-    
+
     # Explicit precision choices
     if precision_choice == "bfloat16":
         if device == "cuda" and not _supports_bfloat16():
@@ -436,7 +446,9 @@ def load_engine(
     if bnb_mode is not None:
         base_model_name = HF_MODELS.get(model_name, {}).get("base_model", "s2-pro")
         model_path = resolve_model_path(base_model_name)
-        logger.info(f"BNB model '{model_name}' -> loading base weights from '{base_model_name}'")
+        logger.info(
+            f"BNB model '{model_name}' -> loading base weights from '{base_model_name}'"
+        )
     else:
         model_path = resolve_model_path(model_name)
 
@@ -480,6 +492,22 @@ def load_engine(
     # load a new model — prevents both models sitting in RAM simultaneously.
     engine._llama_thread = llama_thread
 
+    # Detect if VBAR (ComfyUI Dynamic VRAM) will be active for this engine.
+    # The actual VBAR setup happens in the worker thread, but we need to
+    # know here so the inference engine can skip manual decoder offloading.
+    engine._vbar_active = False
+    if device_str == "cuda" and bnb_mode is None:
+        try:
+            from fish_speech.models.text2semantic.vbar_offload import is_vbar_available
+
+            engine._vbar_active = is_vbar_available()
+            if engine._vbar_active:
+                logger.info(
+                    "ComfyUI Dynamic VRAM (VBAR) detected — will use demand-offloading"
+                )
+        except Exception:
+            pass
+
     logger.info(f"Fish S2 engine ready (attention={attention}).")
     return engine
 
@@ -498,6 +526,7 @@ def load_engine(
 # (ComfyUI node execution is single-threaded per queue).
 # ---------------------------------------------------------------------------
 
+
 def _make_attention_forward(attention: str):
     """
     Return the forward function to install on fish-speech's Attention class,
@@ -507,9 +536,11 @@ def _make_attention_forward(attention: str):
         return None
 
     if attention == "sdpa":
+
         def _forward(self, x, freqs_cis, mask, input_pos=None):
             from fish_speech.models.text2semantic.llama import apply_rotary_emb
             import torch.nn.functional as F
+
             bsz, seqlen, _ = x.shape
             q_size = self.n_head * self.head_dim
             kv_size = self.n_local_heads * self.head_dim
@@ -529,20 +560,25 @@ def _make_attention_forward(attention: str):
             v = v.repeat_interleave(self.n_head // self.n_local_heads, dim=1)
             # Pure SDPA — no explicit backend hint, PyTorch picks best kernel.
             y = F.scaled_dot_product_attention(
-                q, k, v,
+                q,
+                k,
+                v,
                 attn_mask=mask,
                 dropout_p=self.dropout if self.training else 0.0,
                 is_causal=(mask is None),
             )
             y = y.transpose(1, 2).contiguous().view(bsz, seqlen, q_size)
             return self.wo(y)
+
         return _forward
 
     if attention == "flash_attention":
+
         def _forward(self, x, freqs_cis, mask, input_pos=None):
             from fish_speech.models.text2semantic.llama import apply_rotary_emb
             from torch.nn.attention import SDPBackend, sdpa_kernel
             import torch.nn.functional as F
+
             bsz, seqlen, _ = x.shape
             q_size = self.n_head * self.head_dim
             kv_size = self.n_local_heads * self.head_dim
@@ -563,13 +599,16 @@ def _make_attention_forward(attention: str):
             # Force FlashAttention backend on every call.
             with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
                 y = F.scaled_dot_product_attention(
-                    q, k, v,
+                    q,
+                    k,
+                    v,
                     attn_mask=mask,
                     dropout_p=self.dropout if self.training else 0.0,
                     is_causal=(mask is None),
                 )
             y = y.transpose(1, 2).contiguous().view(bsz, seqlen, q_size)
             return self.wo(y)
+
         return _forward
 
     if attention == "sage_attention":
@@ -586,6 +625,7 @@ def _make_attention_forward(attention: str):
             from fish_speech.models.text2semantic.llama import apply_rotary_emb
             from sageattention import sageattn
             import torch.nn.functional as F
+
             bsz, seqlen, _ = x.shape
             q_size = self.n_head * self.head_dim
             kv_size = self.n_local_heads * self.head_dim
@@ -609,11 +649,15 @@ def _make_attention_forward(attention: str):
                 y = sageattn(q, k, v, is_causal=True)
             else:
                 y = F.scaled_dot_product_attention(
-                    q, k, v, attn_mask=mask,
+                    q,
+                    k,
+                    v,
+                    attn_mask=mask,
                     dropout_p=self.dropout if self.training else 0.0,
                 )
             y = y.transpose(1, 2).contiguous().view(bsz, seqlen, q_size)
             return self.wo(y)
+
         return _forward
 
     raise ValueError(f"Unknown attention type: {attention!r}")
@@ -680,14 +724,14 @@ def audio_bytes_from_comfy(audio_dict: dict) -> bytes:
     """
     import soundfile as sf
 
-    waveform = audio_dict["waveform"]       # [B, C, S]
+    waveform = audio_dict["waveform"]  # [B, C, S]
     sample_rate = audio_dict["sample_rate"]
 
-    wav = waveform[0]                                       # [C, S]
-    wav = wav.permute(1, 0).cpu().float().numpy()           # [S, C]
+    wav = waveform[0]  # [C, S]
+    wav = wav.permute(1, 0).cpu().float().numpy()  # [S, C]
 
     if wav.ndim == 2 and wav.shape[1] == 1:
-        wav = wav[:, 0]                                     # mono → 1-D
+        wav = wav[:, 0]  # mono → 1-D
 
     buf = io.BytesIO()
     sf.write(buf, wav, sample_rate, format="WAV", subtype="PCM_16")
@@ -701,9 +745,9 @@ def numpy_audio_to_comfy(audio_np: np.ndarray, sample_rate: int) -> dict:
     Output: {"waveform": Tensor[1, C, S], "sample_rate": int}
     """
     if audio_np.ndim == 1:
-        audio_np = audio_np[np.newaxis, np.newaxis, :]      # [1, 1, S]
+        audio_np = audio_np[np.newaxis, np.newaxis, :]  # [1, 1, S]
     else:
-        audio_np = audio_np.T[np.newaxis, :]                # [1, C, S]
+        audio_np = audio_np.T[np.newaxis, :]  # [1, C, S]
 
     waveform = torch.from_numpy(audio_np).float().contiguous()
     return {"waveform": waveform, "sample_rate": sample_rate}

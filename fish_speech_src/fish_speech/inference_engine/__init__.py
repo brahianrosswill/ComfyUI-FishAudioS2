@@ -20,7 +20,6 @@ from fish_speech.utils.schema import ServeTTSRequest
 
 
 class TTSInferenceEngine(ReferenceLoader, VQManager):
-
     def __init__(
         self,
         llama_queue: queue.Queue,
@@ -84,13 +83,26 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
         segments = []
         deferred_codes = []
         decoder_device = self.decoder_model.device
-        use_cpu_offload = req.low_vram_mode or (len(req.text) > 500 and not req.streaming)
+
+        # Check if VBAR (Dynamic VRAM) is managing the LLaMA model.
+        _vbar_active = getattr(self, "_vbar_active", False)
+        use_cpu_offload = (
+            req.low_vram_mode or (len(req.text) > 500 and not req.streaming)
+        ) and not _vbar_active
+
+        if _vbar_active:
+            logger.info(
+                "VBAR active — decoder stays on GPU, LLaMA weights managed by allocator"
+            )
 
         if use_cpu_offload and decoder_device.type == "cuda":
             self.decoder_model.to("cpu")
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            logger.info("Low-VRAM mode: decoder offloaded to CPU during LLaMA generation")
+                vram_after_decoder_offload = torch.cuda.memory_allocated() / 1024**3
+                logger.info(
+                    f"Low-VRAM mode: decoder offloaded to CPU, VRAM: {vram_after_decoder_offload:.2f} GB (LLaMA only)"
+                )
 
         while True:
             wrapped_result = None
@@ -101,6 +113,7 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
                     pass
                 try:
                     import comfy.model_management as _mm
+
                     _mm.throw_exception_if_processing_interrupted()
                 except ImportError:
                     pass
@@ -153,14 +166,23 @@ class TTSInferenceEngine(ReferenceLoader, VQManager):
             )
             try:
                 offload_resp.get(timeout=30)
-                logger.info("Long-form: LLaMA offloaded to CPU, bringing decoder to GPU...")
+                if torch.cuda.is_available():
+                    vram_after_llama_offload = torch.cuda.memory_allocated() / 1024**3
+                    logger.info(
+                        f"Long-form: LLaMA offloaded to CPU, VRAM: {vram_after_llama_offload:.2f} GB (both models offloaded)"
+                    )
             except queue.Empty:
-                logger.warning("Long-form: LLaMA offload timed out, proceeding with caution.")
-            
+                logger.warning(
+                    "Long-form: LLaMA offload timed out, proceeding with caution."
+                )
+
             self.decoder_model.to(decoder_device)
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            logger.info(f"Long-form: decoding {len(deferred_codes)} segments")
+                vram_before_decode = torch.cuda.memory_allocated() / 1024**3
+                logger.info(
+                    f"Long-form: decoder on GPU, VRAM: {vram_before_decode:.2f} GB, decoding {len(deferred_codes)} segments"
+                )
             for codes in deferred_codes:
                 segment = self._decode_codes(codes)
                 segments.append(segment)

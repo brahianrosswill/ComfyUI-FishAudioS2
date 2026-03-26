@@ -1,5 +1,6 @@
 import dataclasses
 import json
+import logging
 import math
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.utils.checkpoint import checkpoint
 
 from fish_speech.models.text2semantic.lora import LoraConfig, setup_lora
+
+_vbar_logger = logging.getLogger("FishAudioS2.vbar")
 
 
 # ---------------------------------------------------------------------------
@@ -50,9 +53,7 @@ class FP8Linear(nn.Module):
             torch.ones(out_features, 1, dtype=torch.float32),
         )
         if bias:
-            self.bias = nn.Parameter(
-                torch.zeros(out_features, dtype=torch.bfloat16)
-            )
+            self.bias = nn.Parameter(torch.zeros(out_features, dtype=torch.bfloat16))
         else:
             self.bias = None
 
@@ -87,7 +88,9 @@ def _replace_linear_with_fp8(module: nn.Module) -> None:
     """Recursively replace all nn.Linear children with FP8Linear."""
     for name, child in list(module.named_children()):
         if isinstance(child, nn.Linear):
-            fp8_layer = FP8Linear(child.in_features, child.out_features, bias=child.bias is not None)
+            fp8_layer = FP8Linear(
+                child.in_features, child.out_features, bias=child.bias is not None
+            )
             if child.bias is not None:
                 fp8_layer.bias = child.bias
             setattr(module, name, fp8_layer)
@@ -109,6 +112,7 @@ def _replace_linear_with_fp8(module: nn.Module) -> None:
 # BNB REQUIRES CUDA. The guardrails in loader.py ensure we never reach these
 # functions on CPU/MPS, but we double-check here for safety.
 # ---------------------------------------------------------------------------
+
 
 def _apply_bnb_int8(model: nn.Module) -> nn.Module:
     """
@@ -454,6 +458,37 @@ def _remap_fish_qwen3_omni_keys(weights: OrderedDict) -> OrderedDict:
     return new_weights
 
 
+def _run_layers_with_vbar(
+    model, layers, x, *args, prefix="layers", use_checkpoint=False, **kwargs
+):
+    """Run transformer layers with VBAR fault/unpin if a VBAR manager is set.
+
+    When model._vbar_manager is None this is equivalent to the plain for-loop.
+    When it is set, each layer's weights are faulted in before execution and
+    unpinned after, allowing Dynamic VRAM to evict weights under pressure.
+    """
+    vbar_mgr = getattr(model, "_vbar_manager", None)
+    if vbar_mgr is None:
+        for layer in layers:
+            if use_checkpoint:
+                x = checkpoint(layer, x, *args, use_reentrant=True, **kwargs)
+            else:
+                x = layer(x, *args, **kwargs)
+        return x
+
+    for i, layer in enumerate(layers):
+        layer_name = f"{prefix}.{i}"
+        vbar_mgr.fault_layer_weights(layer_name)
+        try:
+            if use_checkpoint:
+                x = checkpoint(layer, x, *args, use_reentrant=True, **kwargs)
+            else:
+                x = layer(x, *args, **kwargs)
+        finally:
+            vbar_mgr.unpin_layer_weights(layer_name)
+    return x
+
+
 class BaseTransformer(nn.Module):
     def __init__(
         self,
@@ -573,11 +608,15 @@ class BaseTransformer(nn.Module):
             atten_mask = atten_mask.logical_not()
             mask = causal & atten_mask
 
-        for layer in self.layers:
-            if self.config.use_gradient_checkpointing and self.training:
-                x = checkpoint(layer, x, freqs_cis, mask, use_reentrant=True)
-            else:
-                x = layer(x, freqs_cis, mask)
+        x = _run_layers_with_vbar(
+            self,
+            self.layers,
+            x,
+            freqs_cis,
+            mask,
+            prefix="layers",
+            use_checkpoint=self.config.use_gradient_checkpointing and self.training,
+        )
 
         slow_out = self.norm(x)
 
@@ -649,8 +688,15 @@ class BaseTransformer(nn.Module):
         mask = self.causal_mask[None, None, input_pos, :max_seq_len]  # (B, N, Q, K)
         freqs_cis = self.freqs_cis[input_pos]
 
-        for layer in self.layers:
-            x = layer(x, freqs_cis, mask, input_pos=input_pos)
+        x = _run_layers_with_vbar(
+            self,
+            self.layers,
+            x,
+            freqs_cis,
+            mask,
+            input_pos=input_pos,
+            prefix="layers",
+        )
 
         if x.size(1) > 1 and not return_all:
             x = x[:, -1:]
@@ -799,13 +845,15 @@ class BaseTransformer(nn.Module):
             # nn.Linear layers with FP8Linear and load quantized weights.
             # This uses pure PyTorch — no torchao required.
             if "fp8" in str(Path(path)).lower():
-                logger.info("Detected FP8 model — loading with FP8Linear (pure PyTorch)")
+                logger.info(
+                    "Detected FP8 model — loading with FP8Linear (pure PyTorch)"
+                )
 
                 # Separate fp8 qdata, scales, buffers, and normal bf16 weights
-                fp8_data    = {}  # "layer.weight"       -> float8_e4m3fn tensor
-                fp8_scales  = {}  # "layer.weight.scale" -> float32 tensor
+                fp8_data = {}  # "layer.weight"       -> float8_e4m3fn tensor
+                fp8_scales = {}  # "layer.weight.scale" -> float32 tensor
                 buf_weights = {}  # "_buf.name"          -> buffer tensor
-                normal      = {}  # everything else      -> bf16 tensor
+                normal = {}  # everything else      -> bf16 tensor
 
                 for k, v in weights.items():
                     if k.startswith("_buf."):
@@ -1049,11 +1097,15 @@ class DualARTransformer(BaseTransformer):
         codebook_embeddings = self.fast_embeddings(codebooks)
         x = torch.cat([x[:, None], codebook_embeddings], dim=1)
 
-        for layer in self.fast_layers:
-            if self.config.use_gradient_checkpointing and self.training:
-                x = checkpoint(layer, x, fast_freqs_cis, fast_mask, use_reentrant=True)
-            else:
-                x = layer(x, fast_freqs_cis, fast_mask)
+        x = _run_layers_with_vbar(
+            self,
+            self.fast_layers,
+            x,
+            fast_freqs_cis,
+            fast_mask,
+            prefix="fast_layers",
+            use_checkpoint=self.config.use_gradient_checkpointing and self.training,
+        )
 
         # unflatten the batch and num_codebooks
         fast_out = self.fast_norm(x)
@@ -1077,8 +1129,15 @@ class DualARTransformer(BaseTransformer):
         ]  # (B, N, Q, K)
         fast_freqs_cis = self.fast_freqs_cis[input_pos]
 
-        for layer in self.fast_layers:
-            x = layer(x, fast_freqs_cis, fast_mask, input_pos=input_pos)
+        x = _run_layers_with_vbar(
+            self,
+            self.fast_layers,
+            x,
+            fast_freqs_cis,
+            fast_mask,
+            input_pos=input_pos,
+            prefix="fast_layers",
+        )
 
         # unflatten the batch and num_codebooks
         fast_out = self.fast_norm(x)  # only take the last token
@@ -1293,10 +1352,9 @@ def apply_rotary_emb(x: Tensor, freqs_cis: Tensor) -> Tensor:
     # Real-valued RoPE in the tensor’s native dtype (bfloat16/float16/float32).
     # Avoids the float32 upcast + type_as round-trip of the complex-number path.
     # Works identically on CUDA, CPU and MPS.
-    xr = x.reshape(*x.shape[:-1], -1, 2)                           # (..., D/2, 2)
-    fc = freqs_cis.view(1, xr.size(1), 1, xr.size(-2), 2)          # (1, S, 1, D/2, 2)
+    xr = x.reshape(*x.shape[:-1], -1, 2)  # (..., D/2, 2)
+    fc = freqs_cis.view(1, xr.size(1), 1, xr.size(-2), 2)  # (1, S, 1, D/2, 2)
     x_re, x_im = xr[..., 0], xr[..., 1]
-    cos, sin    = fc[..., 0], fc[..., 1]
-    out = torch.stack([x_re * cos - x_im * sin,
-                       x_im * cos + x_re * sin], dim=-1)
+    cos, sin = fc[..., 0], fc[..., 1]
+    out = torch.stack([x_re * cos - x_im * sin, x_im * cos + x_re * sin], dim=-1)
     return out.flatten(3)

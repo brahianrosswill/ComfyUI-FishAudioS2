@@ -26,7 +26,9 @@ _offloaded: bool = False
 cancel_event: threading.Event = threading.Event()
 
 
-def get_cache_key(model_path: str, device: str, precision: str, attention: str, model_name: str = "") -> tuple:
+def get_cache_key(
+    model_path: str, device: str, precision: str, attention: str, model_name: str = ""
+) -> tuple:
     # Include model_name in key so s2-pro and s2-pro-bnb-nf4 are cached separately
     # (they share the same path but have different quantization)
     return (model_path, device, precision, attention, model_name)
@@ -69,6 +71,12 @@ def offload_engine_to_cpu() -> None:
         return
 
     engine = _cached_engine
+
+    # When VBAR (Dynamic VRAM) is active, skip manual offloading — the
+    # allocator handles weight placement automatically.
+    if getattr(engine, "_vbar_active", False):
+        logger.info("VBAR active — skipping manual CPU offload, allocator manages VRAM")
+        return
     decoder_ok = False
     llama_ok = False
 
@@ -125,8 +133,7 @@ def offload_engine_to_cpu() -> None:
             except Exception as e:
                 logger.warning(f"Rollback failed: {e}")
         logger.warning(
-            "CPU offload failed — model remains in VRAM. "
-            "Try again or restart ComfyUI."
+            "CPU offload failed — model remains in VRAM. Try again or restart ComfyUI."
         )
 
 
@@ -201,7 +208,9 @@ def unload_engine():
             logger.debug("Waiting for LLaMA worker thread to exit...")
             thread.join(timeout=30)
             if thread.is_alive():
-                logger.warning("LLaMA worker thread did not exit within 30s — proceeding anyway.")
+                logger.warning(
+                    "LLaMA worker thread did not exit within 30s — proceeding anyway."
+                )
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         gc.collect()
@@ -217,6 +226,7 @@ def _hook_comfy_model_management():
     """
     try:
         import comfy.model_management as mm
+
         _original = mm.soft_empty_cache
 
         def _patched_soft_empty_cache(*args, **kwargs):
@@ -225,7 +235,9 @@ def _hook_comfy_model_management():
             return _original(*args, **kwargs)
 
         mm.soft_empty_cache = _patched_soft_empty_cache
-        logger.debug("Hooked comfy.model_management.soft_empty_cache for Fish S2 unload.")
+        logger.debug(
+            "Hooked comfy.model_management.soft_empty_cache for Fish S2 unload."
+        )
     except Exception:
         pass  # not inside ComfyUI — no-op
 

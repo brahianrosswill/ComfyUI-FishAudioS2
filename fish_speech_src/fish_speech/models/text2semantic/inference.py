@@ -53,11 +53,13 @@ RAS_HIGH_TOP_P = 0.9
 # Module-level caches
 _VOCAB_ARANGE: dict = {}
 
+
 def _get_vocab_arange(vocab_size: int, device) -> torch.Tensor:
     key = (vocab_size, str(device))
     if key not in _VOCAB_ARANGE:
         _VOCAB_ARANGE[key] = torch.arange(vocab_size, device=device)
     return _VOCAB_ARANGE[key]
+
 
 _cancel_event = None
 try:
@@ -100,7 +102,7 @@ def _deepcopy_share_tensors(obj):
             return
         seen.add(oid)
         if isinstance(o, torch.Tensor):
-            memo[oid] = o          # share this tensor, do not copy it
+            memo[oid] = o  # share this tensor, do not copy it
         elif isinstance(o, dict):
             for v in o.values():
                 _register(v, seen)
@@ -212,9 +214,13 @@ def decode_one_token_ar(
     # high_temp / high_top_p are pre-allocated by decode_n_tokens and passed in;
     # fall back to creating them here only for the prefill call from generate().
     if high_temp is None:
-        high_temp = torch.tensor(RAS_HIGH_TEMP, device=temperature.device, dtype=temperature.dtype)
+        high_temp = torch.tensor(
+            RAS_HIGH_TEMP, device=temperature.device, dtype=temperature.dtype
+        )
     if high_top_p is None:
-        high_top_p = torch.tensor(RAS_HIGH_TOP_P, device=top_p.device, dtype=top_p.dtype)
+        high_top_p = torch.tensor(
+            RAS_HIGH_TOP_P, device=top_p.device, dtype=top_p.dtype
+        )
     main_token_high = sample(
         biased_logits, temperature=high_temp, top_p=high_top_p, top_k=top_k
     )[0]
@@ -246,7 +252,9 @@ def decode_one_token_ar(
     codebook_out[1] = a
 
     for codebook_idx in range(1, model.config.num_codebooks):
-        logits = model.forward_generate_fast(hidden_states, model._codebook_pos[codebook_idx])
+        logits = model.forward_generate_fast(
+            hidden_states, model._codebook_pos[codebook_idx]
+        )
         a = sample(logits, temperature=temperature, top_p=top_p, top_k=top_k)[0]
         hidden_states = model.fast_embeddings(a)
         codebook_out[codebook_idx + 1] = a
@@ -274,7 +282,9 @@ def decode_n_tokens(
 
     # Circular buffer for RAS window — avoids roll() allocation each token.
     previous_tokens = torch.zeros(
-        (codebook_dim, RAS_WIN_SIZE), dtype=torch.int, device=cur_token.device,
+        (codebook_dim, RAS_WIN_SIZE),
+        dtype=torch.int,
+        device=cur_token.device,
     )
     ras_write_idx = 0
 
@@ -284,7 +294,9 @@ def decode_n_tokens(
 
     # Pre-allocate output buffer — avoids list-append + torch.cat double copy.
     out_buf = torch.empty(
-        (codebook_dim, num_new_tokens), dtype=torch.int, device=cur_token.device,
+        (codebook_dim, num_new_tokens),
+        dtype=torch.int,
+        device=cur_token.device,
     )
     count = 0
 
@@ -366,7 +378,9 @@ def generate(
         max_new_tokens = T_new - T
 
     device = prompt.device
-    dtype = next(model.parameters()).dtype  # model weight dtype — cache once, used below
+    dtype = next(
+        model.parameters()
+    ).dtype  # model weight dtype — cache once, used below
 
     # Allocate KV cache sized to this generation's actual needs.
     # setup_caches() early-exits when the existing cache is already large enough,
@@ -385,9 +399,7 @@ def generate(
 
     # Sequence buffer sized to T_new — exactly as large as needed.
     input_pos = torch.arange(0, T, device=device, dtype=torch.long)
-    empty = torch.empty(
-        (codebook_dim, T_new), dtype=prompt.dtype, device=device
-    )
+    empty = torch.empty((codebook_dim, T_new), dtype=prompt.dtype, device=device)
     empty[:, :T] = prompt
     seq = empty
 
@@ -649,9 +661,9 @@ def generate_long(
         prompt_tokens = [prompt_tokens]
 
     if use_prompt:
-        assert len(prompt_text) == len(
-            prompt_tokens
-        ), "Prompt text and tokens must have the same length"
+        assert len(prompt_text) == len(prompt_tokens), (
+            "Prompt text and tokens must have the same length"
+        )
 
     if prompt_tokens:
         prompt_tokens = [i.cpu() for i in prompt_tokens]
@@ -794,10 +806,18 @@ def generate_long(
 
             batch_max_tokens = max_new_tokens
             if batch_max_tokens == 0:
-                cjk_chars = len(re.findall(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", batch_text))
-                western_words = len(re.sub(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af\s]+", " ", batch_text).split())
+                cjk_chars = len(
+                    re.findall(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", batch_text)
+                )
+                western_words = len(
+                    re.sub(
+                        r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af\s]+", " ", batch_text
+                    ).split()
+                )
                 estimated = western_words * 10 + cjk_chars * 5 + 64
-                batch_max_tokens = max(64, min(estimated, max_length - prompt_length - 64))
+                batch_max_tokens = max(
+                    64, min(estimated, max_length - prompt_length - 64)
+                )
                 logger.info(
                     f"Auto max_new_tokens: {batch_max_tokens} "
                     f"({western_words} words, {cjk_chars} CJK chars, "
@@ -834,11 +854,15 @@ def generate_long(
             codes = y[1:, prompt_length:-1].clone()
             assert (codes >= 0).all(), f"Negative code found: {codes}"
 
-            # Add assistant message with generated codes back to conversation
+            # Add assistant message WITHOUT generated codes to conversation context.
+            # Including generated VQ codes as context causes voice quality drift over time
+            # as the model is influenced by its own outputs. Only the reference audio
+            # in the system message should provide voice characteristics.
+            # The text context (previous user prompts) is preserved via sliding window.
             conversation.append(
                 Message(
                     role="assistant",
-                    parts=[VQPart(codes=codes.cpu(), cal_loss=False)],
+                    parts=[],
                     cal_loss=False,
                     modality="voice",
                     add_im_start=True,
@@ -887,6 +911,31 @@ def launch_thread_safe_queue(
         model, decode_one_token = init_model(
             checkpoint_path, device, precision, compile=compile, bnb_mode=bnb_mode
         )
+
+        # Initialize VBAR (ComfyUI Dynamic VRAM) if available.
+        # When VBAR is active, model weights are demand-offloaded automatically
+        # and the manual .to("cpu") offload path is skipped.
+        _vbar_mgr = None
+        _use_vbar = False
+        if device == "cuda" and bnb_mode is None:
+            try:
+                from fish_speech.models.text2semantic.vbar_offload import (
+                    VBARWeightManager,
+                    is_vbar_available,
+                )
+
+                if is_vbar_available():
+                    import torch
+
+                    dev_idx = torch.cuda.current_device()
+                    _vbar_mgr = VBARWeightManager(device_index=dev_idx)
+                    _vbar_mgr.prepare_model(model)
+                    model._vbar_manager = _vbar_mgr
+                    _use_vbar = True
+                    logger.info("VBAR (Dynamic VRAM) enabled for LLaMA model")
+            except Exception as e:
+                logger.warning(f"VBAR init failed, using manual offload: {e}")
+                _use_vbar = False
         # KV cache is NOT pre-allocated here.  It is allocated lazily in
         # generate() sized to each request's actual T_new (prompt + max_new_tokens).
         # This avoids reserving the full 32k * n_heads * head_dim * n_layers
@@ -904,18 +953,52 @@ def launch_thread_safe_queue(
             # CPU offload/resume control message — not a generation request.
             if "__offload__" in kwargs:
                 target_device = kwargs["__offload__"]
+
+                # When VBAR is active, the allocator handles weight placement.
+                # We only need to move the KV cache and small tensors.
+                if _use_vbar:
+                    logger.info(
+                        f"VBAR active — skipping manual weight offload to {target_device}"
+                    )
+                    response_queue.put(
+                        WrappedGenerateResponse(status="success", response=None)
+                    )
+                    continue
+
                 try:
                     model.to(target_device)
                     # fixed_* tensors are plain attributes (not registered buffers)
                     # so model.to() does NOT move them — move manually.
-                    for attr in ("fixed_temperature", "fixed_top_p", "fixed_repetition_penalty"):
+                    for attr in (
+                        "fixed_temperature",
+                        "fixed_top_p",
+                        "fixed_repetition_penalty",
+                    ):
                         if hasattr(model, attr):
                             setattr(model, attr, getattr(model, attr).to(target_device))
                     # _codebook_pos is a plain list — not moved by model.to()
                     if hasattr(model, "_codebook_pos"):
-                        model._codebook_pos = [t.to(target_device) for t in model._codebook_pos]
+                        model._codebook_pos = [
+                            t.to(target_device) for t in model._codebook_pos
+                        ]
+
+                    # Explicitly move KV caches - they may not be properly registered as submodules
+                    # since they're assigned dynamically in setup_caches() outside __init__
+                    for layer in getattr(model, "layers", []):
+                        kv_cache = getattr(layer.attention, "kv_cache", None)
+                        if kv_cache is not None:
+                            kv_cache.to(target_device)
+                    for layer in getattr(model, "fast_layers", []):
+                        kv_cache = getattr(layer.attention, "kv_cache", None)
+                        if kv_cache is not None:
+                            kv_cache.to(target_device)
+
                     if torch.cuda.is_available():
                         torch.cuda.empty_cache()
+                        vram_freed = torch.cuda.memory_allocated() / 1024**3
+                        logger.info(
+                            f"LLaMA offloaded to {target_device}, current VRAM: {vram_freed:.2f} GB"
+                        )
                     response_queue.put(
                         WrappedGenerateResponse(status="success", response=None)
                     )
