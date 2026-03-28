@@ -831,6 +831,8 @@ def generate_long(
                     f"prompt {prompt_length}, headroom {max_length - prompt_length - batch_max_tokens})"
                 )
 
+            t_infer = time.perf_counter()
+
             y = generate(
                 model=model,
                 prompt=encoded,
@@ -846,12 +848,14 @@ def generate_long(
             if sample_idx == 0 and batch_idx == 0 and compile:
                 logger.info(f"Compilation time: {time.perf_counter() - t0:.2f} seconds")
 
-            t_batch = time.perf_counter() - t0
+            t_infer_elapsed = time.perf_counter() - t_infer
             tokens_generated = y.size(1) - prompt_length
-            tokens_sec = tokens_generated / t_batch if t_batch > 0 else 0
+            tokens_sec = (
+                tokens_generated / t_infer_elapsed if t_infer_elapsed > 0 else 0
+            )
             logger.info(
                 f"Batch {batch_idx}: Generated {tokens_generated} tokens in "
-                f"{t_batch:.02f} seconds, {tokens_sec:.02f} tokens/sec"
+                f"{t_infer_elapsed:.02f} seconds, {tokens_sec:.02f} tokens/sec"
             )
             logger.info(
                 f"Bandwidth achieved: {model_size * tokens_sec / 1e9:.02f} GB/s"
@@ -927,7 +931,9 @@ def launch_thread_safe_queue(
         _use_vbar = False
         _aimdo_auto = False
 
-        if device == "cuda" and bnb_mode is None:
+        _is_fp8 = "fp8" in str(checkpoint_path).lower()
+
+        if device == "cuda" and bnb_mode is None and not _is_fp8:
             try:
                 from fish_speech.models.text2semantic.vbar_offload import (
                     VBARWeightManager,
@@ -936,8 +942,6 @@ def launch_thread_safe_queue(
                 )
 
                 if is_vbar_available():
-                    import torch
-
                     dev_idx = torch.cuda.current_device()
                     _vbar_mgr = VBARWeightManager(device_index=dev_idx)
                     _vbar_mgr.prepare_model(model)
