@@ -729,8 +729,13 @@ def generate_long(
 
     logger.info(f"Split into {len(turns)} turns, grouped into {len(batches)} batches")
 
+    _vbar_mgr = getattr(model, "_vbar_manager", None)
+
     for sample_idx in range(num_samples):
         t0 = time.perf_counter()
+
+        if _vbar_mgr is not None:
+            _vbar_mgr.prioritize()
 
         # Copy conversation structure; tensors (VQPart.codes) are shared not copied.
         conversation = _deepcopy_share_tensors(base_conversation)
