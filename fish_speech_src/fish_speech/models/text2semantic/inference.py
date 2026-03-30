@@ -870,15 +870,35 @@ def generate_long(
             codes = y[1:, prompt_length:-1].clone()
             assert (codes >= 0).all(), f"Negative code found: {codes}"
 
-            # Add assistant message WITHOUT generated codes to conversation context.
-            # Including generated VQ codes as context causes voice quality drift over time
-            # as the model is influenced by its own outputs. Only the reference audio
-            # in the system message should provide voice characteristics.
-            # The text context (previous user prompts) is preserved via sliding window.
+            # Voice anchor: capture the tail of batch 0's generated codes as a
+            # fixed reference for all subsequent batches.  This gives the model
+            # acoustic evidence of "what was just spoken" so it:
+            #   1. Does not duplicate batch 0 content into batch 1
+            #   2. Maintains voice tone consistency across batches
+            # Using a fixed anchor from batch 0 (not a rolling chain) avoids
+            # compounding quality degradation — every batch references the same
+            # clean single-pass output.
+            ANCHOR_CODEBOOK_FRAMES = 150  # ~2 seconds at 75 Hz codec rate
+
+            if batch_idx == 0:
+                # Keep the last N frames of batch 0 as the voice anchor
+                anchor_codes = codes[:, -ANCHOR_CODEBOOK_FRAMES:].cpu()
+                logger.info(
+                    f"Voice anchor captured: {anchor_codes.shape[1]} frames "
+                    f"({anchor_codes.shape[1] / 75:.1f}s)"
+                )
+
+            # Assistant message always includes the voice anchor once captured.
+            # Batch 0's assistant is read by batch 1, batch 1's by batch 2, etc.
+            # Without this the model sees "assistant said nothing" and duplicates.
+            assistant_parts = [
+                VQPart(codes=anchor_codes, cal_loss=False),
+            ]
+
             conversation.append(
                 Message(
                     role="assistant",
-                    parts=[],
+                    parts=assistant_parts,
                     cal_loss=False,
                     modality="voice",
                     add_im_start=True,

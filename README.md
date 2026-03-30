@@ -48,7 +48,7 @@ This ComfyUI wrapper provides native node-based integration with:
 - ** 1500+ Emotive Tags** – Fine-grained control with `[laugh]`, `[whisper]`, `[excited]`, `[sad]`, etc.
 - ** 83 Languages** – Full multilingual support without phoneme preprocessing
 - ** Multi-Speaker TTS** – Generate conversations with multiple cloned voices in one pass
-- ** Long-Form TTS** – Synthesize 4+ minute texts with automatic chunking, sliding window context, deferred decoding, and per-batch auto token sizing for consistent voice and lower VRAM
+- ** Long-Form TTS** – Synthesize 4+ minute texts with automatic chunking, voice anchoring (fixed acoustic reference from first batch to prevent content duplication and tone drift across batches), sliding window context, deferred decoding, and per-batch auto token sizing
 - ** VRAM Optimized** – DAC decoder offloading during generation, automatic GC cleanup between batches, sliding window before generation (not after) for smaller KV caches
 - ** Native ComfyUI Integration** – AUDIO noodle inputs, per-batch progress bars, interruption support
 - ** Optimized Performance** – Support for bf16/fp16/fp32 dtypes, SDPA, FlashAttention, SageAttention
@@ -270,12 +270,20 @@ Multi-speaker conversation synthesis.
 
 ### Fish S2 Long-Form TTS
 
-Long-form text-to-speech with automatic chunking and sliding window context for consistent voice across minutes of audio.
+Long-form text-to-speech with automatic chunking, voice anchoring, and sliding window context for consistent voice across minutes of audio.
 
 Text is automatically split into chunks at sentence boundaries. Each chunk is processed with context from previous chunks (controlled by `max_context_batches`) to maintain consistent voice quality. Optionally clone a voice from reference audio.
 
+**Voice Anchoring:**
+The last ~2 seconds of acoustic tokens from the first batch are captured as a fixed "voice anchor" and included in every subsequent batch's assistant context. This prevents two key problems:
+- **Content duplication** — without anchor codes, the model sees an empty assistant turn and may re-speak content from previous batches
+- **Tone drift** — the anchor provides consistent acoustic evidence of the target voice, preventing the tone from resetting or shifting as batches progress
+
+The anchor is a fixed reference from batch 0 (not a rolling chain), so quality doesn't degrade over time from compounding errors. It adds negligible VRAM (~150 codec frames).
+
 **VRAM Optimizations:**
 - **Automatic precision detection:** RTX 20/GTX 16 series (Turing) auto-fallback to `float16` — prevents OOM on 8GB cards
+- **Voice anchor** — fixed acoustic reference from first batch, ~2 seconds of VQ codes (~150 frames), prevents content duplication and tone drift without compounding quality loss
 - **Sliding window** trims context **before** generation (not after), keeping prompts small and attention fast
 - **DAC decoder offloading** to CPU during LLaMA generation — only loaded back at decode phase
 - **LLaMA offloading** to CPU before decoder reload — prevents OOM when both models need VRAM simultaneously
