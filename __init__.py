@@ -10,10 +10,11 @@ Required pip packages are auto-installed on startup.
 Model weights are auto-downloaded from HuggingFace on first inference.
 """
 
-__version__ = "0.4.4"
+__version__ = "0.4.5"
 
 import importlib
 import logging
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -48,7 +49,7 @@ if not logger.handlers:
 
 def _find_pip() -> list[str]:
     """
-    Return the pip command that installs into the same environment as the
+    Return the pip/uv command that installs into the same environment as the
     currently-running Python — regardless of install type.
 
     Portable embedded:  python_embeded/python.exe -m pip
@@ -59,8 +60,43 @@ def _find_pip() -> list[str]:
     - It always targets the active interpreter, not any pip.exe on PATH
     - It works even when pip.exe doesn't exist but pip is installed as a module
     - It works inside embedded Python where Scripts/ may not be on PATH
+
+    Tries python -m pip first; if pip is not installed (common in uv-managed
+    venvs), falls back to python -m uv pip, then standalone uv pip.
     """
-    return [sys.executable, "-m", "pip"]
+    embedded = "python_embeded" in sys.executable
+    base = [sys.executable] + (["-s"] if embedded else [])
+
+    # 1. Try pip
+    try:
+        subprocess.check_output(
+            base + ["-m", "pip", "--version"],
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        return base + ["-m", "pip"]
+    except Exception:
+        pass
+
+    # 2. Try uv as Python module
+    try:
+        subprocess.check_output(
+            base + ["-m", "uv", "--version"],
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        logger.info("Using uv (python module) for package installs.")
+        return base + ["-m", "uv", "pip"]
+    except Exception:
+        pass
+
+    # 3. Try standalone uv on PATH
+    if shutil.which("uv"):
+        logger.info("Using standalone uv for package installs.")
+        return ["uv", "pip"]
+
+    # 4. Fall back to pip (will fail with a clear error)
+    return base + ["-m", "pip"]
 
 
 def _pip_install(spec: str) -> bool:
