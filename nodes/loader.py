@@ -169,12 +169,17 @@ def get_model_names() -> list[str]:
     base = _get_models_base()
     names = []
 
-    # Always include known HF models first
+    # Always include known HF models first.
+    # Include both the bare name and the "(auto download)" variant so that
+    # workflows remain valid regardless of whether the model was manually
+    # downloaded after the workflow was saved (or vice versa).
     for model_name in HF_MODELS.keys():
         if _is_model_downloaded(model_name):
             names.append(model_name)
+            names.append(f"{model_name} (auto download)")
         else:
             names.append(f"{model_name} (auto download)")
+            names.append(model_name)
 
     # Add any custom models found in the folder
     try:
