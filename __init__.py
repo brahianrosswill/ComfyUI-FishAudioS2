@@ -10,7 +10,7 @@ Required pip packages are auto-installed on startup.
 Model weights are auto-downloaded from HuggingFace on first inference.
 """
 
-__version__ = "0.4.9"
+__version__ = "0.5.0"
 
 import importlib
 import logging
@@ -186,9 +186,39 @@ _REQUIRED = [
 ]
 
 
+def _evict_stale_fish_speech() -> int:
+    """Remove fish_speech.* entries from sys.modules that don't belong to us.
+
+    Other ComfyUI custom nodes (e.g. comfyui-mixlab-nodes) also bundle a
+    ``fish_speech`` package.  If their copy was imported first, Python caches
+    it in ``sys.modules`` and ignores sys.path order on subsequent imports.
+    Evicting those stale entries forces Python to re-resolve via the corrected
+    sys.path, which now points at our bundled copy.
+
+    Returns the number of evicted modules.
+    """
+    fish_src_norm = str(_FISH_SRC).replace("\\", "/").lower()
+    stale_keys = [
+        key for key, mod in sys.modules.items()
+        if key == "fish_speech" or key.startswith("fish_speech.")
+        if hasattr(mod, "__file__") and mod.__file__ is not None
+        and not mod.__file__.replace("\\", "/").lower().startswith(fish_src_norm)
+    ]
+    for key in stale_keys:
+        del sys.modules[key]
+    if stale_keys:
+        importlib.invalidate_caches()
+        logger.info(
+            f"Evicted {len(stale_keys)} stale fish_speech module(s) from sys.modules "
+            f"(namespace collision with another node)"
+        )
+    return len(stale_keys)
+
+
 def _ensure_fish_source() -> bool:
     """
     Add the bundled fish_speech_src/ to sys.path and verify it is importable.
+    Evicts any stale fish_speech.* modules cached from another node's copy.
     The source is shipped with the node — no git, no pip for fish_speech itself.
     """
     if not _FISH_SRC.is_dir():
@@ -201,6 +231,8 @@ def _ensure_fish_source() -> bool:
     fish_src_str = str(_FISH_SRC)
     if fish_src_str not in sys.path:
         sys.path.insert(0, fish_src_str)
+
+    _evict_stale_fish_speech()
 
     try:
         import fish_speech.models  # noqa: F401
